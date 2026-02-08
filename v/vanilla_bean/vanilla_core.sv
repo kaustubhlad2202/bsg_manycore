@@ -162,7 +162,7 @@ module vanilla_core
   logic [pc_width_lp-1:0] pred_or_jump_addr; 
  
  
-  icache #(
+  icache_dual_issue #(
     .icache_tag_width_p(icache_tag_width_p)
     ,.icache_entries_p(icache_entries_p)
     ,.icache_block_size_in_words_p(icache_block_size_in_words_p)
@@ -182,9 +182,16 @@ module vanilla_core
     ,.pc_i(pc_n)
     ,.jalr_prediction_i(jalr_prediction)
 
-    ,.instr_o(instruction)
+    ,.instr0_o(instruction)
+    ,.instr1_o()
     ,.pred_or_jump_addr_o(pred_or_jump_addr)
-    ,.pc_r_o(pc_r)
+    ,.pc0_r_o(pc_r)
+    ,.pc1_r_o()
+
+    ,.dual_issue_eligible_o()
+    ..instr0_lane_o()
+    ,.instr1_lane_o()
+    
     ,.icache_miss_o(icache_miss)
     ,.icache_flush_r_o(icache_flush_r_lo)
     ,.branch_predicted_taken_o(icache_branch_predicted_taken_lo)

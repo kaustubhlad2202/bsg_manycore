@@ -312,4 +312,14 @@ typedef struct packed {
   logic remote; // bit-16
 } csr_interrupt_vector_s;
 
+// Dual issue cache line overhead
+// is_di_eligible - Tells if instruction can be dual isssued
+// decode_type - tells which decode unit instruction will be issued to
+
+typedef struct packed {
+  logic  prev_inst_du_is_eligible;
+  logic  curr_decode_lane;
+} dual_issue_instr_cache_overhead_s;
+
 endpackage
+
