@@ -19,6 +19,7 @@ module icache
     , localparam icache_addr_width_lp=`BSG_SAFE_CLOG2(icache_entries_p/icache_block_size_in_words_p)
     , pc_width_lp=(icache_tag_width_p+`BSG_SAFE_CLOG2(icache_entries_p))
     , icache_block_offset_width_lp=`BSG_SAFE_CLOG2(icache_block_size_in_words_p)
+    , parameter bit icache_dual_issue_p=0
   )
   (
     input clk_i
@@ -38,9 +39,14 @@ module icache
     // icache read (by processor)
     , input [pc_width_lp-1:0] pc_i
     , input [pc_width_lp-1:0] jalr_prediction_i
-    , output [RV32_instr_width_gp-1:0] instr_o
+    , output [RV32_instr_width_gp-1:0] instr0_o
+    , output [RV32_instr_width_gp-1:0] instr1_o
     , output [pc_width_lp-1:0] pred_or_jump_addr_o
-    , output [pc_width_lp-1:0] pc_r_o
+    , output [pc_width_lp-1:0] pc0_r_o
+    , output [pc_width_lp-1:0] pc1_r_o
+    , output dual_issue_eligible_o
+    , output instr0_lane_o
+    , output instr1_lane_o
     , output icache_miss_o
     , output icache_flush_r_o
     , output logic branch_predicted_taken_o
@@ -54,9 +60,8 @@ module icache
   localparam branch_pc_high_width_lp = (pc_width_lp+2) - branch_pc_low_width_lp; 
   localparam jal_pc_high_width_lp    = (pc_width_lp+2) - jal_pc_low_width_lp;
 
-  localparam icache_format_width_lp = `icache_format_width(icache_tag_width_p, icache_block_size_in_words_p);
+  localparam icache_format_width_lp = `icache_format_width(icache_tag_width_p, icache_block_size_in_words_p, icache_dual_issue_p);
 
-  // declare icache entry struct.
   //
   `declare_icache_format_s(icache_tag_width_p, icache_block_size_in_words_p);
 
@@ -138,52 +143,190 @@ module icache
     : jal_pc_lower_cout;
 
 
-  // buffered writes
-  logic [icache_block_size_in_words_p-2:0] imm_sign_r;
-  logic [icache_block_size_in_words_p-2:0] pc_lower_cout_r;
-  logic [icache_block_size_in_words_p-2:0][RV32_instr_width_gp-1:0] buffered_instr_r;
-
-  assign icache_data_li = '{
-    lower_sign : {imm_sign, imm_sign_r},
-    lower_cout : {pc_lower_cout, pc_lower_cout_r},
-    tag        : w_tag,
-    instr      : {injected_instr, buffered_instr_r}
-  };
 
 
-  // icache write counter
-  logic [icache_block_offset_width_lp-1:0] write_count_r;
-  always_ff @ (posedge clk_i) begin
-    if (network_reset_i) begin
-      write_count_r <= '0;
-    end
-    else begin
+//==============================================================================
+// DUAL-ISSUE PREDECODE AND DEPENDENCY TRACKING
+//==============================================================================
+
+generate
+  if (icache_dual_issue_p) begin : gen_dual_issue_predecode
+    
+    // Predecode output signals
+    logic predecode_lane_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rd_lo;
+    logic                              predecode_rd_valid_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rs1_lo;
+    logic                              predecode_rs1_valid_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rs2_lo;
+    logic                              predecode_rs2_valid_lo;
+    
+    // Instantiate predecode module
+    icache_preDecode preDecUnit (
+       .instruction_i(w_instr)
+      ,.inst_lane_o(predecode_lane_lo)
+      ,.inst_rd_o(predecode_rd_lo)
+      ,.inst_rd_valid_o(predecode_rd_valid_lo)
+      ,.inst_rs1_o(predecode_rs1_lo)
+      ,.inst_rs1_valid_o(predecode_rs1_valid_lo)
+      ,.inst_rs2_o(predecode_rs2_lo)
+      ,.inst_rs2_valid_o(predecode_rs2_valid_lo)
+    );
+    
+    // FSM to store previous instruction data
+    logic                              prev_inst_lane_r;
+    logic [RV32_reg_addr_width_gp-1:0] prev_inst_rd_r;
+    logic                              prev_inst_rd_valid_r;
+    
+    always_ff @ (posedge clk_i) begin
       if (v_i & w_i) begin
-        write_count_r <= write_count_r + 1'b1;
+        prev_inst_lane_r     <= predecode_lane_lo;
+        prev_inst_rd_r       <= predecode_rd_lo;
+        prev_inst_rd_valid_r <= predecode_rd_valid_lo;
+      end
+    end
+    
+    // Logic to decide if previous instruction is dual-issue eligible
+    logic prev_inst_du_is_eligible;
+    assign prev_inst_du_is_eligible =                                         
+      (prev_inst_lane_r != predecode_lane_lo) &&                              // Different lanes
+      ( (~prev_inst_rd_valid_r) |                                             // No write, OR
+        ((~predecode_rs1_valid_lo | (prev_inst_rd_r != predecode_rs1_lo)) &&  // No RAW on rs1, AND
+        (~predecode_rs2_valid_lo | (prev_inst_rd_r != predecode_rs2_lo)))     // No RAW on rs2
+      );
+    
+    // Pack overhead into struct
+    typedef struct packed {
+      logic prev_inst_du_is_eligible;
+      logic curr_decode_lane;
+    } dual_issue_instr_cache_overhead_s;
+    
+    dual_issue_instr_cache_overhead_s dual_issue_overhead;
+    assign dual_issue_overhead = '{
+      prev_inst_du_is_eligible: prev_inst_du_is_eligible,
+      curr_decode_lane: predecode_lane_lo
+    };
+    
+    // Buffered overhead for multi-word writes
+    dual_issue_instr_cache_overhead_s [icache_block_size_in_words_p-2:0] dual_issue_overhead_r;
+    
+  end else begin : gen_no_dual_issue_predecode
+    // When disabled, create dummy signals to avoid undefined references
+    localparam dual_issue_overhead_width_c = 0;
+    
+  end
+endgenerate
+
+
+
+//Control signals for instruction buffer
+logic [icache_block_size_in_words_p-2:0] imm_sign_r;
+logic [icache_block_size_in_words_p-2:0] pc_lower_cout_r;
+logic [icache_block_size_in_words_p-2:0][RV32_instr_width_gp-1:0] buffered_instr_r;
+
+//==============================================================================
+// DATA WRITE GROUP FORMATION
+//==============================================================================
+
+//Dual_Issue_Overhead //TODO: Optimize, only used in dual issue mode
+logic [icache_block_size_in_words_p-1:0] du_is_eligible_packed;
+logic [icache_block_size_in_words_p-1:0] dec_lane_packed;
+
+generate
+  if (icache_dual_issue_p) begin : gen_dual_issue_overhead
+    
+    assign du_is_eligible_packed = {
+      1'b0,  // Entry 0 unused
+      gen_dual_issue_predecode.dual_issue_overhead.prev_inst_du_is_eligible,
+      gen_dual_issue_predecode.dual_issue_overhead_r.prev_inst_du_is_eligible[icache_block_size_in_words_p-2:1]
+    };
+    
+    assign dec_lane_packed = {
+      gen_dual_issue_predecode.dual_issue_overhead.curr_decode_lane,
+      gen_dual_issue_predecode.dual_issue_overhead_r.curr_decode_lane
+    };
+    
+    
+  end else begin : gen_single_issue_no_overhead
+    
+    // Assign without dual-issue fields (0-width field gets optimized away); Tie-off
+    assign duis_eligible_packed = 'b0;
+    assign decode_lane_packed = 'b0;
+
+    
+  end
+endgenerate
+
+// Assign with dual-issue fields
+assign icache_data_li = '{
+      du_is_eligible: du_is_eligible_packed,
+      dec_lane:       dec_lane_packed,
+      lower_sign: {imm_sign, imm_sign_r},
+      lower_cout: {pc_lower_cout, pc_lower_cout_r},
+      tag: w_tag,
+      instr: {injected_instr, buffered_instr_r}
+    };
+
+
+
+
+//==============================================================================
+// BUFFERED WRITES AND CACHE/BUFFER ENABLE LOGIC
+//==============================================================================
+
+// icache write counter
+logic [icache_block_offset_width_lp-1:0] write_count_r;
+always_ff @ (posedge clk_i) begin
+  if (network_reset_i) begin
+    write_count_r <= '0;
+  end
+  else begin
+    if (v_i & w_i) begin
+      write_count_r <= write_count_r + 1'b1;
+    end
+  end
+end
+
+
+logic write_en_buffer;
+logic write_en_icache;
+
+always_ff @ (posedge clk_i) begin
+  if (write_en_buffer) begin
+    imm_sign_r[write_count_r]       <= imm_sign;
+    pc_lower_cout_r[write_count_r]  <= pc_lower_cout;
+    buffered_instr_r[write_count_r] <= injected_instr;
+  end
+end
+
+// Dual-issue overhead buffering (conditional)
+generate
+  if (icache_dual_issue_p) begin : gen_dual_issue_buffer
+    always_ff @ (posedge clk_i) begin
+      if (write_en_buffer) begin
+        gen_dual_issue_predecode.dual_issue_overhead_r[write_count_r] <= gen_dual_issue_predecode.dual_issue_overhead;
       end
     end
   end
+endgenerate
 
-  logic write_en_buffer;
-  logic write_en_icache;
-  always_ff @ (posedge clk_i) begin
-    if (write_en_buffer) begin
-      imm_sign_r[write_count_r] <= imm_sign;
-      pc_lower_cout_r[write_count_r] <= pc_lower_cout;
-      buffered_instr_r[write_count_r] <= injected_instr;
-    end
-  end
 
-  always_comb begin
-    if (write_count_r == icache_block_size_in_words_p-1) begin
-      write_en_buffer = 1'b0;
-      write_en_icache = v_i & w_i;
-    end
-    else begin
-      write_en_buffer = v_i & w_i;
-      write_en_icache = 1'b0;
-    end
+always_comb begin
+  if (write_count_r == icache_block_size_in_words_p-1) begin
+    write_en_buffer = 1'b0;
+    write_en_icache = v_i & w_i;
   end
+  else begin
+    write_en_buffer = v_i & w_i;
+    write_en_icache = 1'b0;
+  end
+end
+
+
+
+
+
+
 
   // synopsys translate_off
   always_ff @ (negedge clk_i) begin
@@ -193,8 +336,12 @@ module icache
   end
   // synopsys translate_on
 
+
+
   // Program counter
   logic [pc_width_lp-1:0] pc_r; 
+  logic [pc_width_lp-1:0] pc_next_inst_r; //FIXME (Optimize): Used only for Dual Issue
+
   logic icache_flush_r;
   // Since imem has one cycle delay and we send next cycle's address, pc_n,
   // if the PC is not written, the instruction must not change.
@@ -202,12 +349,14 @@ module icache
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
       pc_r <= '0;
+      pc_next_inst_r <= '0; //FIXME (Optimize): Used only for Dual Issue
       icache_flush_r <= 1'b0;
     end
     else begin
 
       if (v_i & ~w_i) begin
         pc_r <= pc_i;
+        pc_next_inst_r <= pc_i + 'd4; //FIXME (Optimize): Used only for Dual Issue
         icache_flush_r <= 1'b0;
       end
       else begin
@@ -218,7 +367,7 @@ module icache
 
   assign icache_flush_r_o = icache_flush_r;
 
-
+  // TODO: Update the energy saving logic to account for dual-Issue
   // Energy-saving logic
   // - Don't read the icache if the current pc is not at the last word of the block, and 
   //   there is a hint from the next-pc logic that it is reading pc+4 next (no branch or jump).
@@ -229,21 +378,91 @@ module icache
 
   // Merge the PC lower part and high part
   // BYTE operations
-  instruction_s instr_out;
-  assign instr_out = icache_data_lo.instr[pc_r[0+:icache_block_offset_width_lp]];
-  wire lower_sign_out = icache_data_lo.lower_sign[pc_r[0+:icache_block_offset_width_lp]];
-  wire lower_cout_out = icache_data_lo.lower_cout[pc_r[0+:icache_block_offset_width_lp]];
-  wire sel_pc    = ~(lower_sign_out ^ lower_cout_out); 
-  wire sel_pc_p1 = (~lower_sign_out) & lower_cout_out; 
 
+  logic [icache_block_offset_width_lp-1:0] idx;
+  logic [icache_block_offset_width_lp-1:0] idx_next_inst; //FIXME (Optimize): Used only for Dual Issue
+
+  assign idx = pc_r[0+:icache_block_offset_width_lp];
+  assign idx_next_inst = pc_next_inst_r[0+:icache_block_offset_width_lp]; //FIXME (Optimize): Used only for Dual Issue
+
+  instruction_s [1:0] instr_out;
+  logic [1:0] lower_sign_out; //FIXME (Optimize): Use upper bit only for Dual Issue
+  logic [1:0] lower_cout_out; //FIXME (Optimize): Use upper bit only for Dual Issue
+  logic dual_issue; //FIXME (Optimize): Used only for Dual Issue
+  logic [1:0] decode_lane; //FIXME (Optimize): Used only for Dual Issue
+
+  assign instr_out[0] = icache_data_lo.instr[idx];
+  assign lower_sign_out[0] = icache_data_lo.lower_sign[idx];
+  assign lower_cout_out[0] = icache_data_lo.lower_cout[idx];
+
+  logic lower_sign_out_final, lower_cout_out_final;
+
+  generate
+    if(icache_dual_issue_p) begin: dual_read_logic
+
+      //Dual issue eligible in current cycle?
+      assign dual_issue = icache_data_lo.du_is_eligible[idx];
+
+      //Decode lane for both instructions
+      assign decode_lane[0] = icache_data_lo.dec_lane[idx];
+      assign decode_lane[1] = icache_data_lo.dec_lane[idx_next_inst];
+
+      //Get data for the next instruction
+      assign instr_out[1] = icache_data_lo.instr[idx_next_inst];  
+      assign lower_sign_out[1] = icache_data_lo.lower_sign[idx_next_inst];
+      assign lower_cout_out[1] = icache_data_lo.lower_cout[idx_next_inst];
+      
+      //If dual issue, only second instruction can be a branch
+      assign lower_sign_out_final = (dual_issue) ? lower_sign_out[1] : lower_sign_out[0];
+      assign lower_cout_out_final = (dual_issue) ? lower_cout_out[1] : lower_cout_out[0];
+
+    end
+
+    else begin: no_dual_read_logic
+      //Tied off
+      assign dual_issue = 'b0;
+
+      //Tied off
+      assign decode_lane = 'b0;
+
+      //Tied off
+      assign instr_out[1] = 'b0;
+      assign lower_sign_out[1] = 'b0;
+      assign lower_cout_out[1] = 'b0;
+
+      assign lower_sign_out_final = lower_sign_out[0];
+      assign lower_cout_out_final = lower_cout_out[0];  
+
+    end
+
+  endgenerate
+
+  wire sel_pc    = ~(lower_sign_out_final ^ lower_cout_out_final); 
+  wire sel_pc_p1 = (~lower_sign_out_final) & lower_cout_out_final;
+
+
+  
   logic [branch_pc_high_width_lp-1:0] branch_pc_high;
   logic [jal_pc_high_width_lp-1:0] jal_pc_high;
 
-  assign branch_pc_high = pc_r[(branch_pc_low_width_lp-2)+:branch_pc_high_width_lp];
-  assign jal_pc_high = pc_r[(jal_pc_low_width_lp-2)+:jal_pc_high_width_lp];
+  generate
 
-  logic [branch_pc_high_width_lp-1:0] branch_pc_high_out;
-  logic [jal_pc_high_width_lp-1:0] jal_pc_high_out;
+    if(icache_dual_issue_p) begin: dual_issue_branch
+
+      assign branch_pc_high = (dual_issue) ?  pc_next_inst_r[(branch_pc_low_width_lp-2)+:branch_pc_high_width_lp] : pc_r[(branch_pc_low_width_lp-2)+:branch_pc_high_width_lp];
+      assign jal_pc_high = (dual_issue) ? pc_next_inst_r[(branch_pc_low_width_lp-2)+:branch_pc_high_width_lp] : pc_r[(jal_pc_low_width_lp-2)+:jal_pc_high_width_lp];
+    
+    end
+
+    else begin: single_issue_branch
+
+      assign branch_pc_high = pc_r[(branch_pc_low_width_lp-2)+:branch_pc_high_width_lp];
+      assign jal_pc_high = pc_r[(jal_pc_low_width_lp-2)+:jal_pc_high_width_lp];
+
+    end
+
+  endgenerate
+
 
 
   // We are saving the carry-out when we are partially computing the
@@ -260,6 +479,12 @@ module icache
   //   1              1            |            1 
   // ------------------------------+------------------------------
   //
+
+
+
+  logic [branch_pc_high_width_lp-1:0] branch_pc_high_out;
+  logic [jal_pc_high_width_lp-1:0] jal_pc_high_out;
+
   always_comb begin
     if (sel_pc) begin
       branch_pc_high_out = branch_pc_high;
@@ -274,33 +499,168 @@ module icache
       jal_pc_high_out = jal_pc_high - 1'b1;
     end
   end
+  
 
-  wire is_jal_instr =  instr_out.op == `RV32_JAL_OP;
-  wire is_jalr_instr = instr_out.op == `RV32_JALR_OP;
+  logic is_jal_instr;
+  logic is_jalr_instr;
 
-  // these are bytes address
+  generate
+
+    if (icache_dual_issue_p) begin: dual_issue_JAL
+
+      assign is_jal_instr  =  instr_out[dual_issue].op == `RV32_JAL_OP;
+      assign is_jalr_instr =  instr_out[dual_issue].op == `RV32_JALR_OP;
+
+    end
+
+    else begin: single_issue_JAL
+
+      assign is_jal_instr =  instr_out[0].op == `RV32_JAL_OP;
+      assign is_jalr_instr = instr_out[0].op == `RV32_JALR_OP;
+
+    end
+
+  endgenerate
+
+
   logic [pc_width_lp+2-1:0] jal_pc;
   logic [pc_width_lp+2-1:0] branch_pc;
+
+  generate
+
+    if (icache_dual_issue_p) begin: dual_issue_BR_J_PC
+
+      assign branch_pc = {branch_pc_high_out, `RV32_Bimm_13extract(instr_out[dual_issue])};
+      assign jal_pc = {jal_pc_high_out, `RV32_Jimm_21extract(instr_out[dual_issue])};
+
+    end
+
+    else begin: single_issue_BR_JAL_PC
+
+      assign branch_pc = {branch_pc_high_out, `RV32_Bimm_13extract(instr_out[0])};
+      assign jal_pc = {jal_pc_high_out, `RV32_Jimm_21extract(instr_out[0])};
+
+    end
+
+  endgenerate
    
-  assign branch_pc = {branch_pc_high_out, `RV32_Bimm_13extract(instr_out)};
-  assign jal_pc = {jal_pc_high_out, `RV32_Jimm_21extract(instr_out)};
 
-  // assign outputs.
-  assign instr_o = instr_out;
-  assign pc_r_o = pc_r;
+//==============================================================================
+// OUTPUT ASSIGNMENTS
+//==============================================================================
 
-  // this is word addr.
-  assign pred_or_jump_addr_o = is_jal_instr
-    ? jal_pc[2+:pc_width_lp]
-    : (is_jalr_instr
-      ? jalr_prediction_i
-      : branch_pc[2+:pc_width_lp]);
+//Instructions and corresponding PC
+assign instr0_o = instr_out[0];
+assign instr1_o = instr_out[1];
+assign pc0_r_o = pc_r;
+assign pc1_r_o = pc_next_inst_r;
 
-  // the icache miss logic
-  assign icache_miss_o = icache_data_lo.tag != pc_r[icache_block_offset_width_lp+icache_addr_width_lp+:icache_tag_width_p];
- 
-  // branch imm sign
-  assign branch_predicted_taken_o = lower_sign_out;
+//Decode lane out
+assign instr0_lane_o = decode_lane[0];
+assign instr1_lane_o = decode_lane[1];
+
+//Can we dual_issue?
+assign dual_issue_eligible_o = dual_issue;
+
+// this is word addr.
+assign pred_or_jump_addr_o = is_jal_instr
+  ? jal_pc[2+:pc_width_lp]
+  : (is_jalr_instr
+    ? jalr_prediction_i  //FIXME: Check for uArch consistency of jalr_prediction_i when we dual issue
+    : branch_pc[2+:pc_width_lp]);
+
+// branch imm sign
+assign branch_predicted_taken_o = lower_sign_out_final;
+
+// the icache miss logic
+assign icache_miss_o = icache_data_lo.tag != pc_r[icache_block_offset_width_lp+icache_addr_width_lp+:icache_tag_width_p]; //FIXME: Check for uArch consistency of  when we dual issue
+
+assign icache_flush_r_o = icache_flush_r;
+
+
+
+
+
+
+//==============================================================================
+// DUAL-ISSUE ELIGIBILITY STATISTICS TRACKER
+// Samples dual-issue potential at each cache line fill
+//==============================================================================
+
+generate
+  if (icache_dual_issue_p) begin : gen_dual_issue_stats
+    
+    // Counters for tracking dual-issue opportunities
+    integer total_cache_fills;
+    integer total_eligible_pairs;
+    integer histogram [0:icache_block_size_in_words_p];  // histogram[i] = fills with i eligible pairs
+    
+    // Count eligible instructions in current fill
+    logic [icache_block_size_in_words_p-1:0] du_eligible_vector;
+    integer eligible_count;
+    
+    // Capture the eligibility vector at fill time
+    assign du_eligible_vector = {
+      1'b0,  // Entry 0 unused
+      gen_dual_issue_predecode.dual_issue_overhead.prev_inst_du_is_eligible,
+      gen_dual_issue_predecode.dual_issue_overhead_r.prev_inst_du_is_eligible[icache_block_size_in_words_p-2:1]
+    };
+    
+    // Count population (number of 1s)
+    always_comb begin
+      eligible_count = 0;
+      for (int i = 0; i < icache_block_size_in_words_p; i++) begin
+        eligible_count += du_eligible_vector[i];
+      end
+    end
+    
+    // Sample at icache write enable (when cache line fill completes)
+    always_ff @ (posedge clk_i) begin
+      if (network_reset_i) begin
+        total_cache_fills <= 0;
+        total_eligible_pairs <= 0;
+        for (int i = 0; i <= icache_block_size_in_words_p; i++) begin
+          histogram[i] <= 0;
+        end
+      end
+      else if (write_en_icache) begin
+        total_cache_fills <= total_cache_fills + 1;
+        total_eligible_pairs <= total_eligible_pairs + eligible_count;
+        histogram[eligible_count] <= histogram[eligible_count] + 1;
+      end
+    end
+    
+    // Dump statistics at end of simulation
+    // synopsys translate_off
+    final begin
+      $display("==============================================================================");
+      $display("ICACHE DUAL-ISSUE FILL TIME ELIGIBILITY STATISTICS");
+      $display("==============================================================================");
+      $display("Total cache fills: %0d", total_cache_fills);
+      $display("Total eligible dual-issue pairs: %0d", total_eligible_pairs);
+      if (total_cache_fills > 0) begin
+        $display("Average eligible pairs per fill: %.2f", 
+                 real'(total_eligible_pairs) / real'(total_cache_fills));
+        $display("Dual-issue utilization: %.2f%%", 
+                 100.0 * real'(total_eligible_pairs) / real'(total_cache_fills * icache_block_size_in_words_p));
+      end
+      $display("");
+      $display("Histogram (eligible pairs per cache line fill):");
+      for (int i = 0; i <= icache_block_size_in_words_p; i++) begin
+        if (histogram[i] > 0) begin
+          $display("  %0d eligible: %0d fills (%.2f%%)", 
+                   i, histogram[i], 
+                   100.0 * real'(histogram[i]) / real'(total_cache_fills));
+        end
+      end
+      $display("==============================================================================");
+    end
+    // synopsys translate_on
+    
+  end
+endgenerate
+
+
 
  
 endmodule

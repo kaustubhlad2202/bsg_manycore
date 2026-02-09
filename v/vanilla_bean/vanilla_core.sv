@@ -162,10 +162,11 @@ module vanilla_core
   logic [pc_width_lp-1:0] pred_or_jump_addr; 
  
  
-  icache_dual_issue #(
+  icache #(
     .icache_tag_width_p(icache_tag_width_p)
     ,.icache_entries_p(icache_entries_p)
     ,.icache_block_size_in_words_p(icache_block_size_in_words_p)
+    ,.icache_dual_issue_p(0)
   ) icache0 (
     .clk_i(clk_i)
     ,.network_reset_i(network_reset_i)
@@ -189,7 +190,7 @@ module vanilla_core
     ,.pc1_r_o()
 
     ,.dual_issue_eligible_o()
-    ..instr0_lane_o()
+    ,.instr0_lane_o()
     ,.instr1_lane_o()
     
     ,.icache_miss_o(icache_miss)
