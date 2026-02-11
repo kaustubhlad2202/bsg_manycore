@@ -23,7 +23,7 @@ module vcache_profiler
     , parameter stat_info_width_lp=`bsg_cache_stat_info_width(ways_p)
     // periodic stat;
     , parameter period_p = 250
-    , parameter enable_periodic_p=0
+    , parameter enable_periodic_p=1
   )
   (
     input clk_i

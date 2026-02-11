@@ -169,6 +169,7 @@ VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/fcsr.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/mcsr.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/fpu_fdiv_fsqrt.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/fpu_fmin_fmax.sv
+VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/icache_preDecode.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/icache.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/idiv.sv
 VSOURCES += $(BSG_MANYCORE_DIR)/v/vanilla_bean/load_packer.sv

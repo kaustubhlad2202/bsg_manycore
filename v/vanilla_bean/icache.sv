@@ -149,6 +149,13 @@ module icache
 // DUAL-ISSUE PREDECODE AND DEPENDENCY TRACKING
 //==============================================================================
 
+// Buffered overhead for multi-word writes
+dual_issue_instr_cache_overhead_s [icache_block_size_in_words_p-2:0] dual_issue_overhead_r;
+dual_issue_instr_cache_overhead_s dual_issue_overhead;
+
+// Logic to decide if previous instruction is dual-issue eligible
+logic du_is_eligible;
+
 generate
   if (icache_dual_issue_p) begin : gen_dual_issue_predecode
     
@@ -186,29 +193,20 @@ generate
       end
     end
     
-    // Logic to decide if previous instruction is dual-issue eligible
-    logic prev_inst_du_is_eligible;
-    assign prev_inst_du_is_eligible =                                         
+
+    assign du_is_eligible =                                         
       (prev_inst_lane_r != predecode_lane_lo) &&                              // Different lanes
       ( (~prev_inst_rd_valid_r) |                                             // No write, OR
         ((~predecode_rs1_valid_lo | (prev_inst_rd_r != predecode_rs1_lo)) &&  // No RAW on rs1, AND
         (~predecode_rs2_valid_lo | (prev_inst_rd_r != predecode_rs2_lo)))     // No RAW on rs2
       );
-    
-    // Pack overhead into struct
-    typedef struct packed {
-      logic prev_inst_du_is_eligible;
-      logic curr_decode_lane;
-    } dual_issue_instr_cache_overhead_s;
-    
-    dual_issue_instr_cache_overhead_s dual_issue_overhead;
+
     assign dual_issue_overhead = '{
-      prev_inst_du_is_eligible: prev_inst_du_is_eligible,
+      prev_inst_du_is_eligible: du_is_eligible,
       curr_decode_lane: predecode_lane_lo
     };
     
-    // Buffered overhead for multi-word writes
-    dual_issue_instr_cache_overhead_s [icache_block_size_in_words_p-2:0] dual_issue_overhead_r;
+
     
   end else begin : gen_no_dual_issue_predecode
     // When disabled, create dummy signals to avoid undefined references
@@ -237,13 +235,18 @@ generate
     
     assign du_is_eligible_packed = {
       1'b0,  // Entry 0 unused
-      gen_dual_issue_predecode.dual_issue_overhead.prev_inst_du_is_eligible,
-      gen_dual_issue_predecode.dual_issue_overhead_r.prev_inst_du_is_eligible[icache_block_size_in_words_p-2:1]
+      dual_issue_overhead.prev_inst_du_is_eligible,
+      //TODO: Parameterize below code
+      dual_issue_overhead_r[2].prev_inst_du_is_eligible,
+      dual_issue_overhead_r[1].prev_inst_du_is_eligible,
     };
     
     assign dec_lane_packed = {
-      gen_dual_issue_predecode.dual_issue_overhead.curr_decode_lane,
-      gen_dual_issue_predecode.dual_issue_overhead_r.curr_decode_lane
+      dual_issue_overhead.curr_decode_lane,
+      //TODO: Parameterize below code
+      dual_issue_overhead_r[2].curr_decode_lane,
+      dual_issue_overhead_r[1].curr_decode_lane,
+      dual_issue_overhead_r[0].curr_decode_lane
     };
     
     
@@ -304,7 +307,7 @@ generate
   if (icache_dual_issue_p) begin : gen_dual_issue_buffer
     always_ff @ (posedge clk_i) begin
       if (write_en_buffer) begin
-        gen_dual_issue_predecode.dual_issue_overhead_r[write_count_r] <= gen_dual_issue_predecode.dual_issue_overhead;
+        dual_issue_overhead_r[write_count_r] <= dual_issue_overhead;
       end
     end
   end
@@ -599,18 +602,12 @@ generate
     logic [icache_block_size_in_words_p-1:0] du_eligible_vector;
     integer eligible_count;
     
-    // Capture the eligibility vector at fill time
-    assign du_eligible_vector = {
-      1'b0,  // Entry 0 unused
-      gen_dual_issue_predecode.dual_issue_overhead.prev_inst_du_is_eligible,
-      gen_dual_issue_predecode.dual_issue_overhead_r.prev_inst_du_is_eligible[icache_block_size_in_words_p-2:1]
-    };
-    
+
     // Count population (number of 1s)
     always_comb begin
       eligible_count = 0;
       for (int i = 0; i < icache_block_size_in_words_p; i++) begin
-        eligible_count += du_eligible_vector[i];
+        eligible_count += du_is_eligible_packed[i];
       end
     end
     

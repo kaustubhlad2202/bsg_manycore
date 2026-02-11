@@ -3,40 +3,63 @@
 // All other instructions default to INT RF (Lane 0)
 //==============================================================================
 
+// 7'b10000/01/10/11 - FMADD, FMSUB, FNMSUB, FNMADD (reads/writes FP)
+// 7'b1010011 - All FP ops: FADD, FSUB, FMUL, FDIV, FCVT, FMV, FEQ, etc.
 `define DEC_LANE_1_OPCODES \
-  7'b100??11, \        // 7'b10000/01/10/11 - FMADD, FMSUB, FNMSUB, FNMADD (reads/writes FP)
-  `RV32_OP_FP          // 7'b1010011 - All FP ops: FADD, FSUB, FMUL, FDIV, FCVT, FMV, FEQ, etc.
+  7'b100??11, \        
+  `RV32_OP_FP         
 
 
 
 
 // Instructions that never write to rd
+// 7'b0100011 - SB, SH, SW (write to memory)
+// 7'b0100111 - FSW (write to memory)
+// 7'b110001? - BEQ, BNE, BLT, BGE, BLTU, BGEU (only compare)
+// 7'b0001111 - FENCE (memory ordering only)
 `define NO_RD_WRITE_OPCODES \
-  `RV32_STORE, \       // 7'b0100011 - SB, SH, SW (write to memory)
-  `RV32_STORE_FP, \    // 7'b0100111 - FSW (write to memory)
-  `RV32_BRANCH, \      // 7'b110001? - BEQ, BNE, BLT, BGE, BLTU, BGEU (only compare)
-  `RV32_MISC_MEM       // 7'b0001111 - FENCE (memory ordering only)
+  `RV32_STORE, \       
+  `RV32_STORE_FP, \    
+  `RV32_BRANCH, \      
+  `RV32_MISC_MEM       
 
 // Instructions that never read rs1
+// 7'b0110111 - LUI (immediate only)
+// 7'b0010111 - AUIPC (PC + immediate, no rs1)
+// 7'b1101111 - JAL (PC-relative, no rs1)
 `define NO_RS1_READ_OPCODES \
-  `RV32_LUI_OP, \      // 7'b0110111 - LUI (immediate only)
-  `RV32_AUIPC_OP, \    // 7'b0010111 - AUIPC (PC + immediate, no rs1)
-  `RV32_JAL_OP         // 7'b1101111 - JAL (PC-relative, no rs1)
+  `RV32_LUI_OP, \      
+  `RV32_AUIPC_OP, \    
+  `RV32_JAL_OP         
 
 // Instructions that never read rs2
-`define NO_RS2_READ_OPCODES \
-  `RV32_LOAD, \        // 7'b0000011 - LB, LH, LW, LBU, LHU (only rs1)
-  `RV32_LOAD_FP, \     // 7'b0000111 - FLW (only rs1)
-  `RV32_OP_IMM, \      // 7'b0010011 - ADDI, SLTI, XORI, etc. (rs1 + immediate)
-  `RV32_JALR_OP, \     // 7'b1100111 - JALR (only rs1)
-  `RV32_LUI_OP, \      // 7'b0110111 - LUI (no registers)
-  `RV32_AUIPC_OP, \    // 7'b0010111 - AUIPC (no registers)
-  `RV32_JAL_OP, \      // 7'b1101111 - JAL (no registers)
-  `RV32_SYSTEM         // 7'b1110011 - CSR ops (may read rs1 but not rs2)
+// 7'b0000011 - LB, LH, LW, LBU, LHU (only rs1)
+// 7'b0000111 - FLW (only rs1)
+// 7'b0010011 - ADDI, SLTI, XORI, etc. (rs1 + immediate)
+// 7'b1100111 - JALR (only rs1)
+// 7'b0110111 - LUI (no registers)
+// 7'b0010111 - AUIPC (no registers)
+// 7'b1101111 - JAL (no registers)
+// 7'b1110011 - CSR ops (may read rs1 but not rs2)
 
+`define NO_RS2_READ_OPCODES \
+  `RV32_LOAD, \        
+  `RV32_LOAD_FP, \     
+  `RV32_OP_IMM, \      
+  `RV32_JALR_OP, \     
+  `RV32_LUI_OP, \      
+  `RV32_AUIPC_OP, \    
+  `RV32_JAL_OP, \      
+  `RV32_SYSTEM         
 //==============================================================================
 
-module icache_preDecode (
+
+
+`include "bsg_vanilla_defines.svh"
+
+module icache_preDecode
+    import bsg_vanilla_pkg::*;
+    (
     input  logic [RV32_instr_width_gp-1:0]    instruction_i,
     output logic                              inst_lane_o,
     output logic [RV32_reg_addr_width_gp-1:0] inst_rd_o,

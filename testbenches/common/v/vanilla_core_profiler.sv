@@ -36,7 +36,7 @@ module vanilla_core_profiler
     , parameter reg_addr_width_lp = RV32_reg_addr_width_gp
 
     , parameter period_p = 250
-    , parameter enable_periodic_p=0
+    , parameter enable_periodic_p=1
   )
   (
     input clk_i

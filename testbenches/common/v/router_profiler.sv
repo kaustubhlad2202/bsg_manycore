@@ -28,7 +28,7 @@ module router_profiler
     , parameter tracefile_p = "router_stat.csv"
     , parameter periodfile_p = "router_periodic_stat.csv"
     , parameter period_p = 250
-    , parameter enable_periodic_p = 0
+    , parameter enable_periodic_p = 1
     , localparam dirs_lp = 1+(2*dims_p)
   )
   (
