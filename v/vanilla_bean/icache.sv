@@ -42,8 +42,7 @@ module icache
     , output [RV32_instr_width_gp-1:0] instr0_o
     , output [RV32_instr_width_gp-1:0] instr1_o
     , output [pc_width_lp-1:0] pred_or_jump_addr_o
-    , output [pc_width_lp-1:0] pc0_r_o
-    , output [pc_width_lp-1:0] pc1_r_o
+    , output [pc_width_lp-1:0] pc_r_o
     , output dual_issue_eligible_o
     , output instr0_lane_o
     , output instr1_lane_o
@@ -184,12 +183,14 @@ generate
     logic                              prev_inst_lane_r;
     logic [RV32_reg_addr_width_gp-1:0] prev_inst_rd_r;
     logic                              prev_inst_rd_valid_r;
+    logic                              prev_inst_is_branch_r;
     
     always_ff @ (posedge clk_i) begin
       if (v_i & w_i) begin
-        prev_inst_lane_r     <= predecode_lane_lo;
-        prev_inst_rd_r       <= predecode_rd_lo;
-        prev_inst_rd_valid_r <= predecode_rd_valid_lo;
+        prev_inst_lane_r      <= predecode_lane_lo;
+        prev_inst_rd_r        <= predecode_rd_lo;
+        prev_inst_rd_valid_r  <= predecode_rd_valid_lo;
+        prev_inst_is_branch_r <= write_branch_instr | write_jal_instr; 
       end
     end
     
@@ -198,7 +199,9 @@ generate
       (prev_inst_lane_r != predecode_lane_lo) &&                              // Different lanes
       ( (~prev_inst_rd_valid_r) |                                             // No write, OR
         ((~predecode_rs1_valid_lo | (prev_inst_rd_r != predecode_rs1_lo)) &&  // No RAW on rs1, AND
-        (~predecode_rs2_valid_lo | (prev_inst_rd_r != predecode_rs2_lo)))     // No RAW on rs2
+        (~predecode_rs2_valid_lo | (prev_inst_rd_r != predecode_rs2_lo)))  |  // No RAW on rs2, OR
+        (!prev_inst_is_branch_r) //Previous instruction is a branch/Jump TODO: Optimize for conditional branches based on prediction
+
       );
 
     assign dual_issue_overhead = '{
@@ -555,8 +558,7 @@ end
 //Instructions and corresponding PC
 assign instr0_o = instr_out[0];
 assign instr1_o = instr_out[1];
-assign pc0_r_o = pc_r;
-assign pc1_r_o = pc_next_inst_r;
+assign pc_r_o = pc_r;
 
 //Decode lane out
 assign instr0_lane_o = decode_lane[0];

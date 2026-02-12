@@ -41,7 +41,7 @@ module vanilla_core
     , pc_width_lp=(icache_tag_width_p+`BSG_SAFE_CLOG2(icache_entries_p))
     , reg_addr_width_lp = RV32_reg_addr_width_gp
     , data_mask_width_lp=(data_width_p>>3)
-
+    , localparam icache_dual_issue_p=1
     , parameter debug_p=0
   )
   (
@@ -151,22 +151,26 @@ module vanilla_core
   logic [pc_width_lp-1:0] icache_w_pc;
   logic [data_width_p-1:0] icache_winstr;
 
-  logic [pc_width_lp-1:0] pc_n, pc_r;
-  instruction_s instruction;
+  logic [pc_width_lp-1:0] pc_n;
+  logic [pc_width_lp-1:0] pc_r;
+  instruction_s [1:0] instruction;
   logic icache_miss;
   logic icache_flush;
   logic icache_flush_r_lo;
   logic icache_branch_predicted_taken_lo;
 
   logic [pc_width_lp-1:0] jalr_prediction; 
-  logic [pc_width_lp-1:0] pred_or_jump_addr; 
+  logic [pc_width_lp-1:0] pred_or_jump_addr;
+
+  logic dual_issue_eligible_lo;
+  logic [1:0] instr_lane_lo;
  
  
   icache #(
     .icache_tag_width_p(icache_tag_width_p)
     ,.icache_entries_p(icache_entries_p)
     ,.icache_block_size_in_words_p(icache_block_size_in_words_p)
-    ,.icache_dual_issue_p(1)
+    ,.icache_dual_issue_p(icache_dual_issue_p)
   ) icache0 (
     .clk_i(clk_i)
     ,.network_reset_i(network_reset_i)
@@ -183,15 +187,14 @@ module vanilla_core
     ,.pc_i(pc_n)
     ,.jalr_prediction_i(jalr_prediction)
 
-    ,.instr0_o(instruction)
-    ,.instr1_o()
+    ,.instr0_o(instruction[0])
+    ,.instr1_o(instruction[1])
     ,.pred_or_jump_addr_o(pred_or_jump_addr)
-    ,.pc0_r_o(pc_r)
-    ,.pc1_r_o()
+    ,.pc_r_o(pc_r)
 
-    ,.dual_issue_eligible_o()
-    ,.instr0_lane_o()
-    ,.instr1_lane_o()
+    ,.dual_issue_eligible_o(dual_issue_eligible_lo)
+    ,.instr0_lane_o(instr_lane_lo[0])
+    ,.instr1_lane_o(instr_lane_lo[1])
     
     ,.icache_miss_o(icache_miss)
     ,.icache_flush_r_o(icache_flush_r_lo)
@@ -219,6 +222,41 @@ module vanilla_core
   wire [data_width_p-1:0] id_pc = (id_r.pc_plus4 - 'd4);
   wire [data_width_p-1:0] exe_pc = (exe_r.pc_plus4 - 'd4);
   // synopsys translate_on
+ 
+  instruction_s [1:0] aligned_instruction;
+  logic [1:0] lane_valid_lo;
+
+  generate
+    //Allocating fetched instructions to the correct issue lane
+    if (icache_dual_issue_p) begin: dual_issue_lane
+
+      issue_lane issue_lane_DI(
+
+         .dual_issue_i('0) //Tied off to 0 for testing, replace with dual_issue_eligible_lo
+        ,.inst0_i(instruction[0])
+        ,.inst1_i(instruction[1])
+        ,.inst0_lane_i(instr_lane_lo[0])
+        ,.inst1_lane_i(instr_lane_lo[1])
+
+        ,.lane0_inst_o(aligned_instruction[0])
+        ,.lane1_inst_o(aligned_instruction[1])
+        ,.lane0_v_o(lane_valid_lo[0])
+        ,.lane1_v_o(lane_valid_lo[1])
+
+      );
+
+    end
+
+    else begin: single_issue_lane
+      always_comb begin
+       aligned_instruction[0] = instruction[0];
+       aligned_instruction[1] = '0;
+       lane_valid_lo = 2'b01;
+      end
+    end
+       
+  endgenerate
+
 
   // instruction decode
   //
@@ -226,7 +264,7 @@ module vanilla_core
   fp_decode_s fp_decode;
 
   cl_decode decode0 (
-    .instruction_i(instruction)
+    .instruction_i(aligned_instruction[0])
     ,.decode_o(decode)
     ,.fp_decode_o(fp_decode)
   ); 
@@ -271,7 +309,7 @@ module vanilla_core
     ,.w_data_i(int_rf_wdata)
 
     ,.r_v_i(int_rf_read)
-    ,.r_addr_i({instruction.rs2, instruction.rs1})
+    ,.r_addr_i({instruction[0].rs2, instruction[0].rs1})
     ,.r_data_o(int_rf_rdata)
   );
   
@@ -332,7 +370,7 @@ module vanilla_core
     ,.w_data_i(float_rf_wdata)
 
     ,.r_v_i(float_rf_read)
-    ,.r_addr_i({instruction[31:27], instruction.rs2, instruction.rs1})
+    ,.r_addr_i({instruction[1][31:27], instruction[1].rs2, instruction[1].rs1})
     ,.r_data_o(float_rf_rdata)
   );
 
