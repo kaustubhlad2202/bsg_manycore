@@ -238,7 +238,7 @@ generate
       dual_issue_overhead.prev_inst_du_is_eligible,
       //TODO: Parameterize below code
       dual_issue_overhead_r[2].prev_inst_du_is_eligible,
-      dual_issue_overhead_r[1].prev_inst_du_is_eligible,
+      dual_issue_overhead_r[1].prev_inst_du_is_eligible
     };
     
     assign dec_lane_packed = {

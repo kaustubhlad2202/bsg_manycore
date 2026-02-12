@@ -166,7 +166,7 @@ module vanilla_core
     .icache_tag_width_p(icache_tag_width_p)
     ,.icache_entries_p(icache_entries_p)
     ,.icache_block_size_in_words_p(icache_block_size_in_words_p)
-    ,.icache_dual_issue_p(0)
+    ,.icache_dual_issue_p(1)
   ) icache0 (
     .clk_i(clk_i)
     ,.network_reset_i(network_reset_i)
