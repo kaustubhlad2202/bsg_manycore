@@ -232,7 +232,7 @@ module vanilla_core
 
       issue_lane issue_lane_DI(
 
-         .dual_issue_i('0) //Tied off to 0 for testing, replace with dual_issue_eligible_lo
+         .dual_issue_i(dual_issue_eligible_lo)
         ,.inst0_i(instruction[0])
         ,.inst1_i(instruction[1])
         ,.inst0_lane_i(instr_lane_lo[0])
@@ -262,12 +262,31 @@ module vanilla_core
   //
   decode_s decode;
   fp_decode_s fp_decode;
+  
+  generate
+    if (icache_dual_issue_p) begin: dual_issue_decode
+          cl_decode int_decode (
+              .instruction_i(aligned_instruction[0])
+              ,.decode_o(decode)
+              ,.fp_decode_o()
+      );
 
-  cl_decode decode0 (
-    .instruction_i(aligned_instruction[0])
-    ,.decode_o(decode)
-    ,.fp_decode_o(fp_decode)
-  ); 
+            cl_decode fp_decode (
+              .instruction_i(aligned_instruction[1])
+              ,.decode_o()
+              ,.fp_decode_o(fp_decode)
+      );
+      end
+    else begin: single_issue_decode
+             cl_decode decode0 (
+              .instruction_i(aligned_instruction[0])
+              ,.decode_o(decode)
+              ,.fp_decode_o(fp_decode)
+      ); 
+      end
+      
+  endgenerate
+
 
 
   //////////////////////////////
@@ -309,7 +328,7 @@ module vanilla_core
     ,.w_data_i(int_rf_wdata)
 
     ,.r_v_i(int_rf_read)
-    ,.r_addr_i({instruction[0].rs2, instruction[0].rs1})
+    ,.r_addr_i({aligned_instruction[0].rs2, aligned_instruction[0].rs1})
     ,.r_data_o(int_rf_rdata)
   );
   
@@ -370,7 +389,7 @@ module vanilla_core
     ,.w_data_i(float_rf_wdata)
 
     ,.r_v_i(float_rf_read)
-    ,.r_addr_i({instruction[1][31:27], instruction[1].rs2, instruction[1].rs1})
+    ,.r_addr_i({aligned_instruction[1][31:27], aligned_instruction[1].rs2, aligned_instruction[1].rs1})
     ,.r_data_o(float_rf_rdata)
   );
 
