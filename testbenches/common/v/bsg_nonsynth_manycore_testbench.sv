@@ -1006,7 +1006,8 @@ if (enable_vanilla_core_pc_histogram_p) begin
       ,.origin_y_cord_p(`BSG_MACHINE_ORIGIN_Y_CORD)
       )
   vcore_pc_hist
-    (.*);
+    (.*
+    ,.instruction(instruction[0]));
 end // if (enable_vanilla_core_pc_histogram_p)
 `endif
 
