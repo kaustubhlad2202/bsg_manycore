@@ -9,7 +9,7 @@ module issue_lane
     input instruction_s [1:0] inst_i,
     
     //input instruction pcs
-    input [pc_width_lp-1:0] [1:0] inst_pc_i,
+    input [1:0][pc_width_lp-1:0]  inst_pc_i,
 
     //Is current cycle dual_issue?
     input logic dual_issue_i,
@@ -22,7 +22,7 @@ module issue_lane
     output instruction_s  [1:0] lane_inst_o,
 
     // lane allocated pc's
-    output [pc_width_lp-1:0] [1:0] lane_pc_o,
+    output [1:0][pc_width_lp-1:0]  lane_pc_o,
 
     // lane validity
     output    logic         [1:0]  lane_v_o,
@@ -42,6 +42,10 @@ module issue_lane
   assign lane_v_o[0] =
       (inst0_v & (inst_lane_i[0] == 1'b0))
     | (inst1_v & (inst_lane_i[1] == 1'b0));
+
+    assign lane_v_o[0] =
+      (inst0_v & (inst_lane_i[0] == 1'b1))
+    | (inst1_v & (inst_lane_i[1] == 1'b1));
 
   assign lane_inst_o[0] = (inst_lane_i[0] == 1'b0) ? inst_i[0] : inst_i[1];
   assign lane_pc_o[0]   = (inst_lane_i[0] == 1'b0) ? inst_pc_i[0] : inst_pc_i[1];

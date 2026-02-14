@@ -41,7 +41,7 @@ module vanilla_core
     , pc_width_lp=(icache_tag_width_p+`BSG_SAFE_CLOG2(icache_entries_p))
     , reg_addr_width_lp = RV32_reg_addr_width_gp
     , data_mask_width_lp=(data_width_p>>3)
-    , localparam icache_dual_issue_p=0
+    , localparam icache_dual_issue_p=1
     , parameter debug_p=0
   )
   (
@@ -154,7 +154,7 @@ module vanilla_core
   logic [data_width_p-1:0] icache_winstr;
 
   logic [pc_width_lp-1:0] pc_n;
-  logic [pc_width_lp-1:0] [1:0] pc_r;
+  logic [1:0][pc_width_lp-1:0] pc_r;
   instruction_s [1:0] instruction;
   logic icache_miss;
   logic icache_flush;
@@ -201,7 +201,7 @@ module vanilla_core
     ,.branch_predicted_taken_o(icache_branch_predicted_taken_lo)
   );
 
-  logic [pc_width_lp-1:0][1:0] pc_plus4;
+  logic [1:0][pc_width_lp-1:0] pc_plus4;
   assign pc_plus4[0] = pc_r[0] + 1'b1;
   assign pc_plus4[1] = pc_r[1] + 1'b1;
 
@@ -256,7 +256,7 @@ module vanilla_core
       always_comb begin
        aligned_instruction[0] = instruction[0];
        aligned_instruction[1] = '0;
-       aligned_pc_plus4[0] = pc_r[0];
+       aligned_pc_plus4[0] = pc_plus4[0];
        aligned_pc_plus4[1] = '0;
        lane_valid_lo = 2'b01;
        lane0_is_older_lo = 1'b0; //TODO (Logic): This signal is used for FP scoreboard undo? Check arch and set the right value

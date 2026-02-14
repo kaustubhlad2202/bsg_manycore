@@ -39,9 +39,9 @@ module icache
     // icache read (by processor)
     , input [pc_width_lp-1:0] pc_i
     , input [pc_width_lp-1:0] jalr_prediction_i
-    , output [RV32_instr_width_gp-1:0][1:0] instr_o
+    , output [1:0][RV32_instr_width_gp-1:0] instr_o
     , output [pc_width_lp-1:0] pred_or_jump_addr_o
-    , output [pc_width_lp-1:0][1:0] pc_r_o
+    , output [1:0][pc_width_lp-1:0] pc_r_o
     , output dual_issue_eligible_o
     , output [1:0] instr_lane_o
     , output icache_miss_o
