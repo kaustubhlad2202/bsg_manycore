@@ -41,7 +41,7 @@ module vanilla_core
     , pc_width_lp=(icache_tag_width_p+`BSG_SAFE_CLOG2(icache_entries_p))
     , reg_addr_width_lp = RV32_reg_addr_width_gp
     , data_mask_width_lp=(data_width_p>>3)
-    , localparam icache_dual_issue_p=1
+    , localparam icache_dual_issue_p=0
     , parameter debug_p=0
   )
   (
@@ -131,7 +131,8 @@ module vanilla_core
   logic [1:0] id_en;
   logic exe_en, mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
-  id_signals_s [1:0] id_r, id_n;
+  id_signals_s [1:0] id_n;
+  id_signals_s id_r; //WARNING: SET TO [1:0] WHEN UPDATING EXECUTE STAGE, CURRENTLY [1] ignored
   exe_signals_s exe_r, exe_n;
   mem_ctrl_signals_s mem_ctrl_r, mem_ctrl_n;
   mem_data_signals_s mem_data_r, mem_data_n;
@@ -228,6 +229,7 @@ module vanilla_core
   instruction_s [1:0] aligned_instruction;
   logic [pc_width_lp-1:0] [1:0] aligned_pc_plus4;
   logic [1:0] lane_valid_lo;
+  logic lane0_is_older_lo;
 
   generate
     //Allocating fetched instructions to the correct issue lane
@@ -237,8 +239,9 @@ module vanilla_core
         .pc_width_lp(pc_width_lp)) 
         issue_lane_DI(
 
-        ,.inst_i(instruction)
+         .inst_i(instruction)
         ,.inst_pc_i(pc_plus4)
+        ,.dual_issue_i(dual_issue_eligible_lo)
         ,.inst_lane_i(instr_lane_lo)
         ,.lane_inst_o(aligned_instruction)
         ,.lane_pc_o(aligned_pc_plus4)
@@ -300,7 +303,33 @@ module vanilla_core
   //                          //
   //////////////////////////////
 
+logic id_lane0_is_older_r;
+
+generate
+if (icache_dual_issue_p) begin: dual_issue_decode_flops
   bsg_dff_reset_en #(
+    .width_p(2*$bits(id_signals_s))
+  ) id_pipeline (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(id_en)
+    ,.data_i(id_n)
+    ,.data_o(id_r)
+  );
+
+    bsg_dff_reset_en #(
+    .width_p(1)
+  ) id_pipeline_lane0_is_older (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(id_en)
+    ,.data_i(lane0_is_older_lo)
+    ,.data_o(id_lane0_is_older_r)
+  );
+  end
+
+  else begin: single_issue_decode_flops
+    bsg_dff_reset_en #(
     .width_p($bits(id_signals_s))
   ) id_pipeline (
     .clk_i(clk_i)
@@ -309,6 +338,9 @@ module vanilla_core
     ,.data_i(id_n)
     ,.data_o(id_r)
   );
+  end
+endgenerate
+
   
   // int regfile
   //
@@ -394,7 +426,7 @@ module vanilla_core
     ,.w_data_i(float_rf_wdata)
 
     ,.r_v_i(float_rf_read)
-    ,.r_addr_i({aligned_instruction[1][31:27], aligned_instruction[1].rs2, aligned_instruction[1].rs1})
+    ,.r_addr_i({aligned_instruction[icache_dual_issue_p][31:27], aligned_instruction[icache_dual_issue_p].rs2, aligned_instruction[icache_dual_issue_p].rs1})
     ,.r_data_o(float_rf_rdata)
   );
 
@@ -1241,13 +1273,14 @@ module vanilla_core
 
 
   // Next PC logic
+  //TODO (Logic): Currently by default it will assign PC_next based on PC_r[0], fix it to assign correctly
   always_comb begin
     icache_read_pc_plus4_li = 1'b0;
     if (reset_down) begin
       pc_n = pc_init_val_i;
     end
     else if (wb_ctrl_r.icache_miss) begin
-      pc_n = pc_r;
+      pc_n = pc_r[0];
     end
     else if (interrupt_ready) begin
       if (remote_interrupt_ready) begin
@@ -1276,7 +1309,7 @@ module vanilla_core
     end
     else begin
       icache_read_pc_plus4_li = 1'b1;
-      pc_n = pc_plus4;
+      pc_n = pc_plus4[0]; //Incase of dual issue; pc = pc + 8; replace index with dual_issue_eligible_lo
     end
   end
   
@@ -1338,17 +1371,33 @@ module vanilla_core
 
 
   // IF -> ID
+  // TODO (Optimize): Current logic issues only if both lanes are free; incase we want dynamic issues have two id_en; one per lane!
+  generate
+  if (icache_dual_issue_p) begin: dual_issue_decode_packet
   always_comb begin
     // common case
-    id_n = '{
-      pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, pc_plus4, 2'b0},
+    //Packet for Int Lane
+    id_n[0] = '{
+      pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[0], 2'b0},
       pred_or_jump_addr: {{(data_width_p-pc_width_lp-2){1'b0}}, pred_or_jump_addr, 2'b0},
-      instruction: instruction,
+      instruction: aligned_instruction[0],
       decode: decode,
+      fp_decode: '0,
+      icache_miss: 1'b0,
+      valid: lane_valid_lo[0],
+      branch_predicted_taken:  icache_branch_predicted_taken_lo
+    };
+
+    //Packet for FP Lane
+    id_n[1] = '{
+      pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[1], 2'b0},
+      pred_or_jump_addr: '0,
+      instruction: aligned_instruction[1],
+      decode: '0,
       fp_decode: fp_decode,
       icache_miss: 1'b0,
-      valid: 1'b1,
-      branch_predicted_taken:  icache_branch_predicted_taken_lo
+      valid: lane_valid_lo[1],
+      branch_predicted_taken:  '0
     };
 
     if (stall_all) begin
@@ -1369,8 +1418,8 @@ module vanilla_core
       end
       else if (icache_miss) begin
         id_en = 1'b1;
-        id_n = '{
-          pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, pc_plus4, 2'b0},
+        id_n[0] = '{
+          pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[0], 2'b0},
           pred_or_jump_addr: '0,
           instruction: '0,
           decode: '0,
@@ -1379,6 +1428,18 @@ module vanilla_core
           valid: 1'b0,
           branch_predicted_taken: 1'b0
         };
+
+        id_n[1] = '{
+          pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[1], 2'b0},
+          pred_or_jump_addr: '0,
+          instruction: '0,
+          decode: '0,
+          fp_decode: '0,
+          icache_miss: 1'b1,
+          valid: 1'b0,
+          branch_predicted_taken: 1'b0
+        };
+
       end
       else begin
         // common case
@@ -1386,15 +1447,75 @@ module vanilla_core
       end
     end
   end
+  end
+  else begin: single_issue_decode_packet
+
+  always_comb begin
+    // common case
+    id_n[0] = '{
+      pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[0], 2'b0},
+      pred_or_jump_addr: {{(data_width_p-pc_width_lp-2){1'b0}}, pred_or_jump_addr, 2'b0},
+      instruction: aligned_instruction[0],
+      decode: decode,
+      fp_decode: '0,
+      icache_miss: 1'b0,
+      valid: lane_valid_lo[0],
+      branch_predicted_taken:  icache_branch_predicted_taken_lo
+    };
+
+    id_n[1] = '0;
+
+
+    if (stall_all) begin
+      id_en = 1'b0;
+    end
+    else begin
+      if (reset_down | flush) begin
+        id_en = 1'b1;
+        id_n = '0;
+      end    
+      else if (stall_id) begin
+        id_en = 1'b0;
+      end
+      // When stall_id is high, icache miss should not be flushing ID.
+      else if (icache_miss_in_pipe | icache_flush_r_lo) begin
+        id_en = 1'b1;
+        id_n = '0;
+      end
+
+      else if (icache_miss) begin
+        id_en = 1'b1;
+        id_n[0] = '{
+          pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[0], 2'b0},
+          pred_or_jump_addr: '0,
+          instruction: '0,
+          decode: '0,
+          fp_decode: '0,
+          icache_miss: 1'b1,
+          valid: 1'b0,
+          branch_predicted_taken: 1'b0
+        };
+
+
+      end
+      else begin
+        // common case
+        id_en = 1'b1;
+      end
+    end
+  end
+  end
+  endgenerate
+
 
 
   // regfile read
   wire rf_read_en = ~(stall_id | stall_all);
-  assign int_rf_read[0] = id_n.decode.read_rs1 & rf_read_en;
-  assign int_rf_read[1] = id_n.decode.read_rs2 & rf_read_en;
-  assign float_rf_read[0] = id_n.decode.read_frs1 & rf_read_en;
-  assign float_rf_read[1] = id_n.decode.read_frs2 & rf_read_en;
-  assign float_rf_read[2] = id_n.decode.read_frs3 & rf_read_en;
+  assign int_rf_read[0] = id_n[0].decode.read_rs1 & rf_read_en;
+  assign int_rf_read[1] = id_n[0].decode.read_rs2 & rf_read_en;
+  assign float_rf_read[0] = id_n[1].decode.read_frs1 & rf_read_en;
+  assign float_rf_read[1] = id_n[1].decode.read_frs2 & rf_read_en;
+  assign float_rf_read[2] = id_n[1].decode.read_frs3 & rf_read_en;
 
   // helpful control signals;
   wire [reg_addr_width_lp-1:0] id_rs1 = id_r.instruction.rs1;

@@ -11,6 +11,9 @@ module issue_lane
     //input instruction pcs
     input [pc_width_lp-1:0] [1:0] inst_pc_i,
 
+    //Is current cycle dual_issue?
+    input logic dual_issue_i,
+
     // input instruction lanes
     input   logic  [1:0] inst_lane_i,  // 0->lane0, 1->lane1
 
