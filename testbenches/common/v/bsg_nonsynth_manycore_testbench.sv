@@ -875,6 +875,7 @@ if (enable_vcore_profiling_p) begin
     ,.origin_y_cord_p(`BSG_MACHINE_ORIGIN_Y_CORD)
   ) vcore_prof (
     .*
+    ,.pc_r(pc_r[0])
     ,.instruction(instruction[0])
     ,.clk_i(clk_i)
     ,.global_ctr_i($root.`HOST_MODULE_PATH.global_ctr)
@@ -1007,6 +1008,7 @@ if (enable_vanilla_core_pc_histogram_p) begin
       )
   vcore_pc_hist
     (.*
+    ,.pc_r(pc_r[0])
     ,.instruction(instruction[0]));
 end // if (enable_vanilla_core_pc_histogram_p)
 `endif
