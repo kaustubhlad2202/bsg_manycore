@@ -1,25 +1,31 @@
+ `include "bsg_vanilla_defines.svh"
+
 module issue_lane
   import bsg_vanilla_pkg::*;
-  #(parameter INST_WIDTH_P = 32)
+  #(
+     parameter pc_width_lp=0
+  )
   (
-    // control
-    input    logic     dual_issue_i,  //Decides if the current cycle is dual_issue
-
-    // input instructions
-    input instruction_s  inst0_i,
-    input instruction_s  inst1_i,
+    input instruction_s [1:0] inst_i,
+    
+    //input instruction pcs
+    input [pc_width_lp-1:0] [1:0] inst_pc_i,
 
     // input instruction lanes
-    input   logic   inst0_lane_i,  // 0->lane0, 1->lane1
-    input   logic   inst1_lane_i,  // 0->lane0, 1->lane1
+    input   logic  [1:0] inst_lane_i,  // 0->lane0, 1->lane1
+
 
     // lane allocated instructions
-    output instruction_s   lane0_inst_o,
-    output instruction_s   lane1_inst_o,
+    output instruction_s  [1:0] lane_inst_o,
+
+    // lane allocated pc's
+    output [pc_width_lp-1:0] [1:0] lane_pc_o,
 
     // lane validity
-    output    logic           lane0_v_o,
-    output    logic           lane1_v_o
+    output    logic         [1:0]  lane_v_o,
+
+    // older lane
+    output    logic           lane0_is_older_o 
   );
 
 
@@ -30,16 +36,16 @@ module issue_lane
   assign inst1_v = dual_issue_i;  // inst1 only present when dual_issue_i = 1
 
   // per-lane valid (OR of inputs that choose that lane)
-  assign lane0_v_o =
-      (inst0_v & (inst0_lane_i == 1'b0))
-    | (inst1_v & (inst1_lane_i == 1'b0));
+  assign lane_v_o[0] =
+      (inst0_v & (inst_lane_i[0] == 1'b0))
+    | (inst1_v & (inst_lane_i[1] == 1'b0));
 
-  assign lane1_v_o =
-      (inst0_v & (inst0_lane_i == 1'b1))
-    | (inst1_v & (inst1_lane_i == 1'b1));
+  assign lane_inst_o[0] = (inst_lane_i[0] == 1'b0) ? inst_i[0] : inst_i[1];
+  assign lane_pc_o[0]   = (inst_lane_i[0] == 1'b0) ? inst_pc_i[0] : inst_pc_i[1];
+  assign lane_inst_o[1] = (inst_lane_i[0] == 1'b0) ? inst_i[1] : inst_i[0];
+  assign lane_pc_o[1]   = (inst_lane_i[0] == 1'b0) ? inst_pc_i[1] : inst_pc_i[0];
 
-  //inst0 is always valid and decides where both instructions go; use valid qualifiers to disqualify output inst1's lane if single issue
-  assign lane0_inst_o = (inst0_lane_i == 1'b0) ? inst0_i : inst1_i;
-  assign lane1_inst_o = (inst0_lane_i == 1'b0) ? inst1_i : inst0_i;
+  //Is lane0 older?
+  assign lane0_is_older_o = ~inst_lane_i[0];
 
 endmodule

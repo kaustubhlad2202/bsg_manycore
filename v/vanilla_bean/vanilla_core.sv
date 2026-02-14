@@ -128,9 +128,10 @@ module vanilla_core
   // pipeline signals
   // ctrl signals set to zero when reset_i is high.
   // data signals are not reset to zero.
-  logic id_en, exe_en, mem_ctrl_en, mem_data_en,
+  logic [1:0] id_en;
+  logic exe_en, mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
-  id_signals_s id_r, id_n;
+  id_signals_s [1:0] id_r, id_n;
   exe_signals_s exe_r, exe_n;
   mem_ctrl_signals_s mem_ctrl_r, mem_ctrl_n;
   mem_data_signals_s mem_data_r, mem_data_n;
@@ -152,7 +153,7 @@ module vanilla_core
   logic [data_width_p-1:0] icache_winstr;
 
   logic [pc_width_lp-1:0] pc_n;
-  logic [pc_width_lp-1:0] pc_r;
+  logic [pc_width_lp-1:0] [1:0] pc_r;
   instruction_s [1:0] instruction;
   logic icache_miss;
   logic icache_flush;
@@ -187,21 +188,21 @@ module vanilla_core
     ,.pc_i(pc_n)
     ,.jalr_prediction_i(jalr_prediction)
 
-    ,.instr0_o(instruction[0])
-    ,.instr1_o(instruction[1])
+    ,.instr_o(instruction)
     ,.pred_or_jump_addr_o(pred_or_jump_addr)
     ,.pc_r_o(pc_r)
 
     ,.dual_issue_eligible_o(dual_issue_eligible_lo)
-    ,.instr0_lane_o(instr_lane_lo[0])
-    ,.instr1_lane_o(instr_lane_lo[1])
+    ,.instr_lane_o(instr_lane_lo)
     
     ,.icache_miss_o(icache_miss)
     ,.icache_flush_r_o(icache_flush_r_lo)
     ,.branch_predicted_taken_o(icache_branch_predicted_taken_lo)
   );
 
-  wire [pc_width_lp-1:0] pc_plus4 = pc_r + 1'b1;
+  logic [pc_width_lp-1:0][1:0] pc_plus4;
+  assign pc_plus4[0] = pc_r[0] + 1'b1;
+  assign pc_plus4[1] = pc_r[1] + 1'b1;
 
   // ifetch counter
   logic [lg_icache_block_size_in_words_lp-1:0] ifetch_count_r;
@@ -218,30 +219,31 @@ module vanilla_core
 
   // debug pc
   // synopsys translate_off
-  wire [data_width_p-1:0] if_pc = {{(data_width_p-pc_width_lp-2){1'b0}}, pc_r, 2'b00};
+  //TODO (Logic): look at the usage of signals and update the logic, all pcs defaulted to 0 right now
+  wire [data_width_p-1:0] if_pc = {{(data_width_p-pc_width_lp-2){1'b0}}, pc_r[0], 2'b00};
   wire [data_width_p-1:0] id_pc = (id_r.pc_plus4 - 'd4);
   wire [data_width_p-1:0] exe_pc = (exe_r.pc_plus4 - 'd4);
   // synopsys translate_on
  
   instruction_s [1:0] aligned_instruction;
+  logic [pc_width_lp-1:0] [1:0] aligned_pc_plus4;
   logic [1:0] lane_valid_lo;
 
   generate
     //Allocating fetched instructions to the correct issue lane
     if (icache_dual_issue_p) begin: dual_issue_lane
 
-      issue_lane issue_lane_DI(
+      issue_lane #(
+        .pc_width_lp(pc_width_lp)) 
+        issue_lane_DI(
 
-         .dual_issue_i(dual_issue_eligible_lo)
-        ,.inst0_i(instruction[0])
-        ,.inst1_i(instruction[1])
-        ,.inst0_lane_i(instr_lane_lo[0])
-        ,.inst1_lane_i(instr_lane_lo[1])
-
-        ,.lane0_inst_o(aligned_instruction[0])
-        ,.lane1_inst_o(aligned_instruction[1])
-        ,.lane0_v_o(lane_valid_lo[0])
-        ,.lane1_v_o(lane_valid_lo[1])
+        ,.inst_i(instruction)
+        ,.inst_pc_i(pc_plus4)
+        ,.inst_lane_i(instr_lane_lo)
+        ,.lane_inst_o(aligned_instruction)
+        ,.lane_pc_o(aligned_pc_plus4)
+        ,.lane_v_o(lane_valid_lo)
+        ,.lane0_is_older_o(lane0_is_older_lo)
 
       );
 
@@ -251,7 +253,10 @@ module vanilla_core
       always_comb begin
        aligned_instruction[0] = instruction[0];
        aligned_instruction[1] = '0;
+       aligned_pc_plus4[0] = pc_r[0];
+       aligned_pc_plus4[1] = '0;
        lane_valid_lo = 2'b01;
+       lane0_is_older_lo = 1'b0; //TODO (Logic): This signal is used for FP scoreboard undo? Check arch and set the right value
       end
     end
        

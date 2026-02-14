@@ -39,13 +39,11 @@ module icache
     // icache read (by processor)
     , input [pc_width_lp-1:0] pc_i
     , input [pc_width_lp-1:0] jalr_prediction_i
-    , output [RV32_instr_width_gp-1:0] instr0_o
-    , output [RV32_instr_width_gp-1:0] instr1_o
+    , output [RV32_instr_width_gp-1:0][1:0] instr_o
     , output [pc_width_lp-1:0] pred_or_jump_addr_o
-    , output [pc_width_lp-1:0] pc_r_o
+    , output [pc_width_lp-1:0][1:0] pc_r_o
     , output dual_issue_eligible_o
-    , output instr0_lane_o
-    , output instr1_lane_o
+    , output [1:0] instr_lane_o
     , output icache_miss_o
     , output icache_flush_r_o
     , output logic branch_predicted_taken_o
@@ -355,14 +353,14 @@ end
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
       pc_r <= '0;
-      pc_next_inst_r <= '0; //FIXME (Optimize): Used only for Dual Issue
+      pc_next_inst_r <= 'b1; //FIXME (Optimize): Used only for Dual Issue
       icache_flush_r <= 1'b0;
     end
     else begin
 
       if (v_i & ~w_i) begin
         pc_r <= pc_i;
-        pc_next_inst_r <= pc_i + 'd4; //FIXME (Optimize): Used only for Dual Issue
+        pc_next_inst_r <= pc_i + 'b1; //FIXME (Optimize): Used only for Dual Issue
         icache_flush_r <= 1'b0;
       end
       else begin
@@ -556,13 +554,11 @@ end
 //==============================================================================
 
 //Instructions and corresponding PC
-assign instr0_o = instr_out[0];
-assign instr1_o = instr_out[1];
-assign pc_r_o = pc_r;
+assign instr_o = instr_out;
+assign pc_r_o = {pc_next_inst_r, pc_r};
 
 //Decode lane out
-assign instr0_lane_o = decode_lane[0];
-assign instr1_lane_o = decode_lane[1];
+assign instr_lane_o = decode_lane;
 
 //Can we dual_issue?
 assign dual_issue_eligible_o = dual_issue;
