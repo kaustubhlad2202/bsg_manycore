@@ -128,11 +128,12 @@ module vanilla_core
   // pipeline signals
   // ctrl signals set to zero when reset_i is high.
   // data signals are not reset to zero.
-  logic [1:0] id_en;
+  logic id_en;  //TODO (optimize): Current logic issues when no stalls, later implement lanewise stall issuing!
   logic exe_en, mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
   id_signals_s [1:0] id_n;
-  id_signals_s id_r; //WARNING: SET TO [1:0] WHEN UPDATING EXECUTE STAGE, CURRENTLY [1] ignored
+  id_signals_s id_r;
+  id_signals_s  id_r_fp;  //We have an additional id_r_fp to store FP data incase of dual_issue
   exe_signals_s exe_r, exe_n;
   mem_ctrl_signals_s mem_ctrl_r, mem_ctrl_n;
   mem_data_signals_s mem_data_r, mem_data_n;
@@ -203,7 +204,7 @@ module vanilla_core
 
   logic [1:0][pc_width_lp-1:0] pc_plus4;
   assign pc_plus4[0] = pc_r[0] + 1'b1;
-  assign pc_plus4[1] = pc_r[1] + 1'b1;
+  assign pc_plus4[1] = pc_r[dual_issue_eligible_lo] + 1'b1; //We ensure pc and pc_plus4[1] are same for single issue, TODO (optimize): can we get rid of this signal?
 
   // ifetch counter
   logic [lg_icache_block_size_in_words_lp-1:0] ifetch_count_r;
@@ -236,7 +237,7 @@ module vanilla_core
     if (icache_dual_issue_p) begin: dual_issue_lane
 
       issue_lane #(
-        .pc_width_lp(pc_width_lp)) 
+        .pc_width_p(pc_width_lp)) 
         issue_lane_DI(
 
          .inst_i(instruction)
@@ -259,7 +260,7 @@ module vanilla_core
        aligned_pc_plus4[0] = pc_plus4[0];
        aligned_pc_plus4[1] = '0;
        lane_valid_lo = 2'b01;
-       lane0_is_older_lo = 1'b0; //TODO (Logic): This signal is used for FP scoreboard undo? Check arch and set the right value
+       lane0_is_older_lo = 1'b1; //TODO (Logic): This signal is used for FP scoreboard undo? Check arch and set the right value
       end
     end
        
@@ -304,6 +305,7 @@ module vanilla_core
   //////////////////////////////
 
 logic id_lane0_is_older_r;
+logic id_issue_size_r;
 
 generate
 if (icache_dual_issue_p) begin: dual_issue_decode_flops
@@ -325,6 +327,16 @@ if (icache_dual_issue_p) begin: dual_issue_decode_flops
     ,.en_i(id_en)
     ,.data_i(lane0_is_older_lo)
     ,.data_o(id_lane0_is_older_r)
+  );
+
+    bsg_dff_reset_en #(
+    .width_p(1)
+  ) id_pipeline_issue_size (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(id_en)
+    ,.data_i(dual_issue_eligible_lo)
+    ,.data_o(id_issue_size_r)
   );
   end
 
@@ -1309,7 +1321,7 @@ endgenerate
     end
     else begin
       icache_read_pc_plus4_li = 1'b1;
-      pc_n = pc_plus4[0]; //Incase of dual issue; pc = pc + 8; replace index with dual_issue_eligible_lo
+      pc_n = pc_plus4[dual_issue_eligible_lo];
     end
   end
   
@@ -1376,13 +1388,13 @@ endgenerate
   if (icache_dual_issue_p) begin: dual_issue_decode_packet
   always_comb begin
     // common case
-    //Packet for Int Lane
+    // Lane 0 can contain both int and fp
     id_n[0] = '{
       pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[0], 2'b0},
       pred_or_jump_addr: {{(data_width_p-pc_width_lp-2){1'b0}}, pred_or_jump_addr, 2'b0},
       instruction: aligned_instruction[0],
       decode: decode,
-      fp_decode: '0,
+      fp_decode: fp_decode,
       icache_miss: 1'b0,
       valid: lane_valid_lo[0],
       branch_predicted_taken:  icache_branch_predicted_taken_lo
@@ -1396,7 +1408,7 @@ endgenerate
       decode: '0,
       fp_decode: fp_decode,
       icache_miss: 1'b0,
-      valid: lane_valid_lo[1],
+      valid: dual_issue_eligible_lo,
       branch_predicted_taken:  '0
     };
 
@@ -1513,9 +1525,9 @@ endgenerate
   wire rf_read_en = ~(stall_id | stall_all);
   assign int_rf_read[0] = id_n[0].decode.read_rs1 & rf_read_en;
   assign int_rf_read[1] = id_n[0].decode.read_rs2 & rf_read_en;
-  assign float_rf_read[0] = id_n[1].decode.read_frs1 & rf_read_en;
-  assign float_rf_read[1] = id_n[1].decode.read_frs2 & rf_read_en;
-  assign float_rf_read[2] = id_n[1].decode.read_frs3 & rf_read_en;
+  assign float_rf_read[0] = id_n[dual_issue_eligible_lo].decode.read_frs1 & rf_read_en;
+  assign float_rf_read[1] = id_n[dual_issue_eligible_lo].decode.read_frs2 & rf_read_en;
+  assign float_rf_read[2] = id_n[dual_issue_eligible_lo].decode.read_frs3 & rf_read_en;
 
   // helpful control signals;
   wire [reg_addr_width_lp-1:0] id_rs1 = id_r.instruction.rs1;
