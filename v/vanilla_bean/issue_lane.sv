@@ -55,4 +55,6 @@ module issue_lane
   //Is lane0 older?
   assign lane0_is_older_o = ~inst_lane_i[0];
 
+  wire structural_hazard_detected = (inst_lane_i[0] == inst_lane_i[1]) & dual_issue_i;
+
 endmodule

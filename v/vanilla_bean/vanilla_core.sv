@@ -2167,39 +2167,210 @@ endgenerate
 
 
 
+// ============================================================================
+// DEBUG SIGNALS - DUAL-ISSUE FRONT-END
+// ============================================================================
 
 // --------------------------------------------------------------------
-// Debug / trace overhead wires for icache → issue_lane → ID
+// Section 1: iCache Raw Outputs (before issue_lane alignment)
 // --------------------------------------------------------------------
+(* keep = "true" *) instruction_s    dbg_icache_inst0_raw;
+(* keep = "true" *) instruction_s    dbg_icache_inst1_raw;
+(* keep = "true" *) logic [pc_width_lp-1:0] dbg_icache_pc0_raw;
+(* keep = "true" *) logic [pc_width_lp-1:0] dbg_icache_pc1_raw;
+(* keep = "true" *) logic            dbg_icache_dual_issue_eligible;
+(* keep = "true" *) logic            dbg_icache_inst0_lane;  // 0=INT, 1=FP
+(* keep = "true" *) logic            dbg_icache_inst1_lane;
+(* keep = "true" *) logic            dbg_icache_v0;
+(* keep = "true" *) logic            dbg_icache_v1;
 
-// Instructions and PCs coming out of icache / issue_lane
-(* keep = "true" *) instruction_s    dbg_ifetch_inst0, dbg_ifetch_inst1;
-(* keep = "true" *) logic [pc_width_lp-1:0] dbg_ifetch_pc0,   dbg_ifetch_pc1;
-(* keep = "true" *) logic                   dbg_ifetch_v0,    dbg_ifetch_v1;
-(* keep = "true" *) logic                   dbg_ifetch_lane0_is_older;
+// Assign from icache outputs (pre-alignment)
+assign dbg_icache_inst0_raw            = instruction[0];
+assign dbg_icache_inst1_raw            = instruction[1];
+assign dbg_icache_pc0_raw              = pc_r[0];
+assign dbg_icache_pc1_raw              = pc_r[1];  // Sequential
+assign dbg_icache_dual_issue_eligible  = dual_issue_eligible_lo;
+assign dbg_icache_inst0_lane           = instr_lane_lo[0];
+assign dbg_icache_inst1_lane           = instr_lane_lo[1];
 
-// Assign from existing signals (after issue_lane)
-assign dbg_ifetch_inst0          = aligned_instruction[0];
-assign dbg_ifetch_inst1          = aligned_instruction[1];
-assign dbg_ifetch_pc0            = aligned_pc_plus4[0];
-assign dbg_ifetch_pc1            = aligned_pc_plus4[1];
-assign dbg_ifetch_v0             = lane_valid_lo[0];
-assign dbg_ifetch_v1             = lane_valid_lo[1];
-assign dbg_ifetch_lane0_is_older = lane0_is_older_lo;
-
-// Decode outputs per lane (before packing into id_n)
-(* keep = "true" *) decode_s      dbg_decode_lane0;
-(* keep = "true" *) fp_decode_s   dbg_fp_decode_lane1;
-
-assign dbg_decode_lane0    = decode;     // decode of aligned_instruction[0]
-assign dbg_fp_decode_lane1 = fp_decode;  // decode of aligned_instruction[1]
 // --------------------------------------------------------------------
-// Debug copies of ID-stage flops
+// Section 2: Issue Lane Outputs (after alignment)
 // --------------------------------------------------------------------
-(* keep = "true" *) id_signals_s dbg_id_lane0, dbg_id_lane1;
+(* keep = "true" *) instruction_s    dbg_lane_inst0;
+(* keep = "true" *) instruction_s    dbg_lane_inst1;
+(* keep = "true" *) logic [pc_width_lp-1:0] dbg_lane_pc0;
+(* keep = "true" *) logic [pc_width_lp-1:0] dbg_lane_pc1;
+(* keep = "true" *) logic            dbg_lane_v0;
+(* keep = "true" *) logic            dbg_lane_v1;
+(* keep = "true" *) logic            dbg_lane0_is_older;
+(* keep = "true" *) logic            dbg_lane_dual_issue;
 
-assign dbg_id_lane0 = id_r[0];
-assign dbg_id_lane1 = id_r[1];
+assign dbg_lane_inst0         = aligned_instruction[0];
+assign dbg_lane_inst1         = aligned_instruction[1];
+assign dbg_lane_pc0           = aligned_pc_plus4[0];
+assign dbg_lane_pc1           = aligned_pc_plus4[1];
+assign dbg_lane_v0            = lane_valid_lo[0];
+assign dbg_lane_v1            = lane_valid_lo[1];
+assign dbg_lane0_is_older     = lane0_is_older_lo;
+assign dbg_lane_dual_issue    = lane_valid_lo[0] & lane_valid_lo[1];
+
+// --------------------------------------------------------------------
+// Section 3: Decode Stage Outputs (per lane)
+// --------------------------------------------------------------------
+(* keep = "true" *) decode_s         dbg_decode_lane0;
+(* keep = "true" *) decode_s         dbg_decode_lane1;
+(* keep = "true" *) fp_decode_s      dbg_fp_decode_lane0;
+(* keep = "true" *) fp_decode_s      dbg_fp_decode_lane1;
+(* keep = "true" *) logic [4:0]      dbg_rs1_addr_lane0;
+(* keep = "true" *) logic [4:0]      dbg_rs1_addr_lane1;
+(* keep = "true" *) logic [4:0]      dbg_rs2_addr_lane0;
+(* keep = "true" *) logic [4:0]      dbg_rs2_addr_lane1;
+(* keep = "true" *) logic [4:0]      dbg_rd_addr_lane0;
+(* keep = "true" *) logic [4:0]      dbg_rd_addr_lane1;
+
+assign dbg_decode_lane0       = decode[0];
+assign dbg_decode_lane1       = decode[1];
+assign dbg_fp_decode_lane0    = fp_decode[0];
+assign dbg_fp_decode_lane1    = fp_decode[1];
+assign dbg_rs1_addr_lane0     = aligned_instruction[0].rs1;
+assign dbg_rs1_addr_lane1     = aligned_instruction[1].rs1;
+assign dbg_rs2_addr_lane0     = aligned_instruction[0].rs2;
+assign dbg_rs2_addr_lane1     = aligned_instruction[1].rs2;
+assign dbg_rd_addr_lane0      = aligned_instruction[0].rd;
+assign dbg_rd_addr_lane1      = aligned_instruction[1].rd;
+
+//Commented out rest of the debug logic, comment in as we update stages
+// // --------------------------------------------------------------------
+// // Section 4: Hazard Detection
+// // --------------------------------------------------------------------
+// (* keep = "true" *) logic            dbg_structural_hazard;
+// (* keep = "true" *) logic            dbg_raw_hazard_lane0_lane1;
+// (* keep = "true" *) logic            dbg_raw_hazard_lane1_lane0;
+// (* keep = "true" *) logic            dbg_int_dependency_lane0;
+// (* keep = "true" *) logic            dbg_int_dependency_lane1;
+// (* keep = "true" *) logic            dbg_float_dependency_lane0;
+// (* keep = "true" *) logic            dbg_float_dependency_lane1;
+// (* keep = "true" *) logic            dbg_load_use_hazard_lane0;
+// (* keep = "true" *) logic            dbg_load_use_hazard_lane1;
+
+// // Structural hazard: both instructions want same lane
+// assign dbg_structural_hazard = dual_issue_eligible_lo & 
+//                                (inst_lane[0] == inst_lane[1]);
+
+// // RAW hazard: lane1 depends on lane0 (inst0 writes, inst1 reads)
+// assign dbg_raw_hazard_lane0_lane1 = 
+//   lane_valid_lo[0] & lane_valid_lo[1] &
+//   (aligned_instruction[0].rd != 5'b0) &
+//   ((aligned_instruction[1].rs1 == aligned_instruction[0].rd & decode[1].read_rs1) |
+//    (aligned_instruction[1].rs2 == aligned_instruction[0].rd & decode[1].read_rs2));
+
+// // RAW hazard: lane0 depends on lane1 (when lane1 is older)
+// assign dbg_raw_hazard_lane1_lane0 = 
+//   lane_valid_lo[0] & lane_valid_lo[1] &
+//   ~lane0_is_older_lo &  // lane1 is older
+//   (aligned_instruction[1].rd != 5'b0) &
+//   ((aligned_instruction[0].rs1 == aligned_instruction[1].rd & decode[0].read_rs1) |
+//    (aligned_instruction[0].rs2 == aligned_instruction[1].rd & decode[0].read_rs2));
+
+// // Scoreboard dependencies
+// assign dbg_int_dependency_lane0   = int_dependency[0];
+// assign dbg_int_dependency_lane1   = int_dependency[1];
+// assign dbg_float_dependency_lane0 = float_dependency[0];
+// assign dbg_float_dependency_lane1 = float_dependency[1];
+
+// // Load-use hazards
+// assign dbg_load_use_hazard_lane0  = stall_depend_local_load[0];
+// assign dbg_load_use_hazard_lane1  = stall_depend_local_load[1];
+
+// // --------------------------------------------------------------------
+// // Section 5: Stall & Flush Signals
+// // --------------------------------------------------------------------
+// (* keep = "true" *) logic            dbg_stall_all;
+// (* keep = "true" *) logic            dbg_stall_id_lane0;
+// (* keep = "true" *) logic            dbg_stall_id_lane1;
+// (* keep = "true" *) logic            dbg_icache_miss;
+// (* keep = "true" *) logic            dbg_branch_mispredict;
+// (* keep = "true" *) logic            dbg_jalr_mispredict;
+// (* keep = "true" *) logic            dbg_icache_flush;
+
+// assign dbg_stall_all            = stall_all;
+// assign dbg_stall_id_lane0       = stall_id[0];
+// assign dbg_stall_id_lane1       = stall_id[1];
+// assign dbg_icache_miss          = icache_miss;
+// assign dbg_branch_mispredict    = branch_mispredict;
+// assign dbg_jalr_mispredict      = jalr_mispredict;
+// assign dbg_icache_flush         = icache_flush;
+
+// // --------------------------------------------------------------------
+// // Section 6: ID Stage Pipeline Registers
+// // --------------------------------------------------------------------
+// (* keep = "true" *) id_signals_s     dbg_id_lane0;
+// (* keep = "true" *) id_signals_s     dbg_id_lane1;
+// (* keep = "true" *) logic            dbg_id_lane0_valid;
+// (* keep = "true" *) logic            dbg_id_lane1_valid;
+
+// assign dbg_id_lane0       = id_r[0];
+// assign dbg_id_lane1       = id_r[1];
+// assign dbg_id_lane0_valid = ~id_r[0].icache_miss & lane_valid_lo[0];
+// assign dbg_id_lane1_valid = ~id_r[1].icache_miss & lane_valid_lo[1];
+
+// // --------------------------------------------------------------------
+// // Section 7: PC Management
+// // --------------------------------------------------------------------
+// (* keep = "true" *) logic [pc_width_lp-1:0] dbg_pc_r;
+// (* keep = "true" *) logic [pc_width_lp-1:0] dbg_pc_n;
+// (* keep = "true" *) logic [pc_width_lp-1:0] dbg_pc_plus4;
+// (* keep = "true" *) logic [pc_width_lp-1:0] dbg_pc_plus8;
+// (* keep = "true" *) logic                   dbg_pc_dual_increment;
+
+// assign dbg_pc_r              = pc_r;
+// assign dbg_pc_n              = pc_n;
+// assign dbg_pc_plus4          = pc_plus4;
+// assign dbg_pc_plus8          = pc_plus4 + 32'd4;
+// assign dbg_pc_dual_increment = dbg_lane_dual_issue & ~stall_all;
+
+// // --------------------------------------------------------------------
+// // Section 8: Register File Access (for dependency tracking)
+// // --------------------------------------------------------------------
+// (* keep = "true" *) logic [data_width_p-1:0] dbg_int_rf_rs1_lane0;
+// (* keep = "true" *) logic [data_width_p-1:0] dbg_int_rf_rs1_lane1;
+// (* keep = "true" *) logic [data_width_p-1:0] dbg_int_rf_rs2_lane0;
+// (* keep = "true" *) logic [data_width_p-1:0] dbg_int_rf_rs2_lane1;
+// (* keep = "true" *) logic [1:0]              dbg_rs1_forward_sel_lane0;
+// (* keep = "true" *) logic [1:0]              dbg_rs1_forward_sel_lane1;
+// (* keep = "true" *) logic [1:0]              dbg_rs2_forward_sel_lane0;
+// (* keep = "true" *) logic [1:0]              dbg_rs2_forward_sel_lane1;
+
+// assign dbg_int_rf_rs1_lane0      = int_rf_rs1[0];
+// assign dbg_int_rf_rs1_lane1      = int_rf_rs1[1];
+// assign dbg_int_rf_rs2_lane0      = int_rf_rs2[0];
+// assign dbg_int_rf_rs2_lane1      = int_rf_rs2[1];
+// assign dbg_rs1_forward_sel_lane0 = rs1_forward_sel[0];
+// assign dbg_rs1_forward_sel_lane1 = rs1_forward_sel[1];
+// assign dbg_rs2_forward_sel_lane0 = rs2_forward_sel[0];
+// assign dbg_rs2_forward_sel_lane1 = rs2_forward_sel[1];
+
+// // --------------------------------------------------------------------
+// // Section 9: Instruction Opcode Breakdown (for quick wave inspection)
+// // --------------------------------------------------------------------
+// (* keep = "true" *) logic [6:0] dbg_opcode_lane0;
+// (* keep = "true" *) logic [6:0] dbg_opcode_lane1;
+// (* keep = "true" *) logic [2:0] dbg_funct3_lane0;
+// (* keep = "true" *) logic [2:0] dbg_funct3_lane1;
+// (* keep = "true" *) logic [6:0] dbg_funct7_lane0;
+// (* keep = "true" *) logic [6:0] dbg_funct7_lane1;
+
+// assign dbg_opcode_lane0 = aligned_instruction[0].op;
+// assign dbg_opcode_lane1 = aligned_instruction[1].op;
+// assign dbg_funct3_lane0 = aligned_instruction[0].funct3;
+// assign dbg_funct3_lane1 = aligned_instruction[1].funct3;
+// assign dbg_funct7_lane0 = aligned_instruction[0].funct7;
+// assign dbg_funct7_lane1 = aligned_instruction[1].funct7;
+
+// // ============================================================================
+// // END DEBUG SIGNALS
+// // ============================================================================
+
 
 endmodule
 
