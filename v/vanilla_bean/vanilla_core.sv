@@ -365,7 +365,7 @@ endgenerate
     ,.w_data_i(int_rf_wdata)
 
     ,.r_v_i(int_rf_read)
-    ,.r_addr_i({aligned_instruction[0].rs2, aligned_instruction[0].rs1})
+    ,.r_addr_i({aligned_instruction[0].rs2, aligned_instruction[0].rs1}) //WARNING: Tied to 0, should read from 1 ie. FP lane but breaks sim
     ,.r_data_o(int_rf_rdata)
   );
   
