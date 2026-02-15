@@ -43,7 +43,7 @@ module issue_lane
       (inst0_v & (inst_lane_i[0] == 1'b0))
     | (inst1_v & (inst_lane_i[1] == 1'b0));
 
-    assign lane_v_o[0] =
+    assign lane_v_o[1] =
       (inst0_v & (inst_lane_i[0] == 1'b1))
     | (inst1_v & (inst_lane_i[1] == 1'b1));
 

@@ -227,7 +227,7 @@ module vanilla_core
   // synopsys translate_on
  
   instruction_s [1:0] aligned_instruction;
-  logic [pc_width_lp-1:0] [1:0] aligned_pc_plus4;
+  logic [1:0][pc_width_lp-1:0] aligned_pc_plus4;
   logic [1:0] lane_valid_lo;
   logic lane0_is_older_lo;
 
@@ -2166,6 +2166,40 @@ endgenerate
   // synopsys translate_on
 
 
+
+
+// --------------------------------------------------------------------
+// Debug / trace overhead wires for icache → issue_lane → ID
+// --------------------------------------------------------------------
+
+// Instructions and PCs coming out of icache / issue_lane
+(* keep = "true" *) instruction_s    dbg_ifetch_inst0, dbg_ifetch_inst1;
+(* keep = "true" *) logic [pc_width_lp-1:0] dbg_ifetch_pc0,   dbg_ifetch_pc1;
+(* keep = "true" *) logic                   dbg_ifetch_v0,    dbg_ifetch_v1;
+(* keep = "true" *) logic                   dbg_ifetch_lane0_is_older;
+
+// Assign from existing signals (after issue_lane)
+assign dbg_ifetch_inst0          = aligned_instruction[0];
+assign dbg_ifetch_inst1          = aligned_instruction[1];
+assign dbg_ifetch_pc0            = aligned_pc_plus4[0];
+assign dbg_ifetch_pc1            = aligned_pc_plus4[1];
+assign dbg_ifetch_v0             = lane_valid_lo[0];
+assign dbg_ifetch_v1             = lane_valid_lo[1];
+assign dbg_ifetch_lane0_is_older = lane0_is_older_lo;
+
+// Decode outputs per lane (before packing into id_n)
+(* keep = "true" *) decode_s      dbg_decode_lane0;
+(* keep = "true" *) fp_decode_s   dbg_fp_decode_lane1;
+
+assign dbg_decode_lane0    = decode;     // decode of aligned_instruction[0]
+assign dbg_fp_decode_lane1 = fp_decode;  // decode of aligned_instruction[1]
+// --------------------------------------------------------------------
+// Debug copies of ID-stage flops
+// --------------------------------------------------------------------
+(* keep = "true" *) id_signals_s dbg_id_lane0, dbg_id_lane1;
+
+assign dbg_id_lane0 = id_r[0];
+assign dbg_id_lane1 = id_r[1];
 
 endmodule
 
