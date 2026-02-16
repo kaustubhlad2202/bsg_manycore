@@ -132,8 +132,8 @@ module vanilla_core
   logic exe_en, mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
   id_signals_s [1:0] id_n;
-  id_signals_s id_r;
-  id_signals_s  id_r_fp;  //We have an additional id_r_fp to store FP data incase of dual_issue
+  id_signals_s  id_r;
+  id_signals_s  id_fp_r;  //We have an additional id_fp_r to store FP data incase of dual_issue
   exe_signals_s exe_r, exe_n;
   mem_ctrl_signals_s mem_ctrl_r, mem_ctrl_n;
   mem_data_signals_s mem_data_r, mem_data_n;
@@ -269,23 +269,36 @@ module vanilla_core
 
   // instruction decode
   //
-  decode_s decode;
-  fp_decode_s fp_decode;
-  
-  generate
-    if (icache_dual_issue_p) begin: dual_issue_decode
-          cl_decode int_decode (
-              .instruction_i(aligned_instruction[0])
-              ,.decode_o(decode)
-              ,.fp_decode_o()
-      );
+  decode_s decode_single, decode_dual, decode;
+  fp_decode_s fp_decode_single, fp_decode_dual, fp_decode;
 
-            cl_decode fp_decode (
-              .instruction_i(aligned_instruction[1])
-              ,.decode_o()
-              ,.fp_decode_o(fp_decode)
-      );
-      end
+  
+generate
+  if (icache_dual_issue_p) begin: dual_issue_decode
+    // Instantiate BOTH paths, then select with runtime mux
+    cl_decode int_decode (
+      .instruction_i(aligned_instruction[0]),
+      .decode_o(decode_dual),
+      .fp_decode_o()
+    );
+
+    cl_decode flp_decode (
+      .instruction_i(aligned_instruction[1]),
+      .decode_o(),
+      .fp_decode_o(fp_decode_dual)
+    );
+
+    cl_decode single_issue_decode (
+      .instruction_i(aligned_instruction[0]),
+      .decode_o(decode_single),
+      .fp_decode_o(fp_decode_single)
+    );
+
+    // Runtime mux based on dual_issue_eligible_lo
+    assign decode = dual_issue_eligible_lo ? decode_dual : decode_single;
+    assign fp_decode = dual_issue_eligible_lo ? fp_decode_dual : fp_decode_single;
+  end
+
     else begin: single_issue_decode
              cl_decode decode0 (
               .instruction_i(aligned_instruction[0])
@@ -316,7 +329,7 @@ if (icache_dual_issue_p) begin: dual_issue_decode_flops
     ,.reset_i(reset_i)
     ,.en_i(id_en)
     ,.data_i(id_n)
-    ,.data_o(id_r)
+    ,.data_o({id_fp_r, id_r})
   );
 
     bsg_dff_reset_en #(
