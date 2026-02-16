@@ -165,6 +165,18 @@ generate
     logic [RV32_reg_addr_width_gp-1:0] predecode_rs2_lo;
     logic                              predecode_rs2_valid_lo;
     
+    // Predecode output signals for current instruction
+    logic                              predecode_lane_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rd_lo;
+    logic                              predecode_rd_valid_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rs1_lo;
+    logic                              predecode_rs1_valid_lo;
+    logic [RV32_reg_addr_width_gp-1:0] predecode_rs2_lo;
+    logic                              predecode_rs2_valid_lo;
+    logic                              predecode_is_hybrid_lo;
+    logic                              predecode_is_flw_lo;
+    logic                              predecode_is_fsw_lo;
+    
     // Instantiate predecode module
     icache_preDecode preDecUnit (
        .instruction_i(w_instr)
@@ -175,6 +187,9 @@ generate
       ,.inst_rs1_valid_o(predecode_rs1_valid_lo)
       ,.inst_rs2_o(predecode_rs2_lo)
       ,.inst_rs2_valid_o(predecode_rs2_valid_lo)
+      ,.inst_is_hybrid_o(predecode_is_hybrid_lo)
+      ,.inst_is_flw_o(predecode_is_flw_lo)
+      ,.inst_is_fsw_o(predecode_is_fsw_lo)
     );
     
     // FSM to store previous instruction data
@@ -182,6 +197,9 @@ generate
     logic [RV32_reg_addr_width_gp-1:0] prev_inst_rd_r;
     logic                              prev_inst_rd_valid_r;
     logic                              prev_inst_is_branch_r;
+    logic                              prev_inst_is_hybrid_r;
+    logic                              prev_inst_is_flw_r;
+    logic                              prev_inst_is_fsw_r;
     
     always_ff @ (posedge clk_i) begin
       if (v_i & w_i) begin
@@ -189,18 +207,82 @@ generate
         prev_inst_rd_r        <= predecode_rd_lo;
         prev_inst_rd_valid_r  <= predecode_rd_valid_lo;
         prev_inst_is_branch_r <= write_branch_instr | write_jal_instr; 
+        prev_inst_is_hybrid_r <= predecode_is_hybrid_lo;
+        prev_inst_is_flw_r    <= predecode_is_flw_lo;
+        prev_inst_is_fsw_r    <= predecode_is_fsw_lo;
       end
     end
     
+    //==========================================================================
+    // RAW Hazard Detection for FLW and FP instruction pairs
+    // FLW writes to FP RF, so check if current FP instruction reads that register
+    //==========================================================================
+    logic fl_raw_hazard;
+    
+    always_comb begin
+      fl_raw_hazard = 1'b0;
+      
+      // Previous is FLW, current is pure FP (Lane 1, not FLW/FSW, not hybrid)
+      if (prev_inst_is_flw_r && 
+          (predecode_lane_lo == 1'b1) && 
+          !predecode_is_flw_lo && 
+          !predecode_is_fsw_lo && 
+          !predecode_is_hybrid_lo) begin
+        
+        // Check if FLW's destination (FP rd) matches current FP instruction's sources or destination
+        // RAW: FLW.rd vs FP.rs1 or FP.rs2
+        if (prev_inst_rd_valid_r && predecode_rs1_valid_lo && (prev_inst_rd_r == predecode_rs1_lo)) begin
+          fl_raw_hazard = 1'b1;
+        end
+        if (prev_inst_rd_valid_r && predecode_rs2_valid_lo && (prev_inst_rd_r == predecode_rs2_lo)) begin
+          fl_raw_hazard = 1'b1;
+        end
+        // WAW: FLW.rd vs FP.rd
+        if (prev_inst_rd_valid_r && predecode_rd_valid_lo && (prev_inst_rd_r == predecode_rd_lo)) begin
+          fl_raw_hazard = 1'b1;
+        end
+      end
+      
+      // Previous is pure FP, current is FSW or FLW
+      if ((prev_inst_lane_r == 1'b1) && 
+          !prev_inst_is_flw_r && 
+          !prev_inst_is_fsw_r && 
+          !prev_inst_is_hybrid_r) begin
+        
+        // Current is FSW: RAW check (prev FP.rd vs FSW.rs2)
+        if (predecode_is_fsw_lo && 
+            prev_inst_rd_valid_r && 
+            predecode_rs2_valid_lo && 
+            (prev_inst_rd_r == predecode_rs2_lo)) begin
+          fl_raw_hazard = 1'b1;
+        end
+        
+        // Current is FLW: WAW check (prev FP.rd vs FLW.rd)
+        if (predecode_is_flw_lo && 
+            prev_inst_rd_valid_r && 
+            predecode_rd_valid_lo && 
+            (prev_inst_rd_r == predecode_rd_lo)) begin
+          fl_raw_hazard = 1'b1;
+        end
+      end
+    end
+    
+    //==========================================================================
+    // Dual-Issue Eligibility
+    //==========================================================================
+    logic instructions_belong_to_different_lanes;
+    
+    assign instructions_belong_to_different_lanes = (prev_inst_lane_r != predecode_lane_lo);
+    
+    assign du_is_eligible = 
+      instructions_belong_to_different_lanes &&  // Different lanes (Lane 0 vs Lane 1)
+      !prev_inst_is_branch_r &&                  // Previous not branch/jump
+      !prev_inst_is_hybrid_r &&                  // Previous instruction not hybrid
+      !predecode_is_hybrid_lo &&                 // Current instruction not hybrid
+      !fl_raw_hazard;                           // No FP register conflicts
 
-    assign du_is_eligible =                                         
-      (prev_inst_lane_r != predecode_lane_lo) &&                              // Different lanes
-      ( (~prev_inst_rd_valid_r) |                                             // No write, OR
-        ((~predecode_rs1_valid_lo | (prev_inst_rd_r != predecode_rs1_lo)) &&  // No RAW on rs1, AND
-        (~predecode_rs2_valid_lo | (prev_inst_rd_r != predecode_rs2_lo)))  |  // No RAW on rs2, OR
-        (!prev_inst_is_branch_r) //Previous instruction is a branch/Jump TODO: Optimize for conditional branches based on prediction
 
-      );
+
 
     assign dual_issue_overhead = '{
       prev_inst_du_is_eligible: du_is_eligible,
