@@ -428,65 +428,78 @@ endgenerate
   );
 
 
-  // FP regfile
-  //
-  logic float_rf_wen;
-  logic [reg_addr_width_lp-1:0] float_rf_waddr;
-  logic [fpu_recoded_data_width_gp-1:0] float_rf_wdata;
- 
-  logic [2:0] float_rf_read;
-  logic [2:0][fpu_recoded_data_width_gp-1:0] float_rf_rdata;
+// FP regfile (3R2W for dual-issue)
+//
+logic [1:0] float_rf_wen;                                    // MODIFIED: 2 write enables
+logic [1:0][reg_addr_width_lp-1:0] float_rf_waddr;          // MODIFIED: 2 write addresses
+logic [1:0][fpu_recoded_data_width_gp-1:0] float_rf_wdata;  // MODIFIED: 2 write data
 
-  regfile #(
-    .width_p(fpu_recoded_data_width_gp)
-    ,.els_p(RV32_reg_els_gp)
-    ,.num_rs_p(3)
-    ,.x0_tied_to_zero_p(0)
-  ) float_rf (
-    .clk_i(clk_i)
-    ,.reset_i(reset_i)
+logic [2:0] float_rf_read;
+logic [2:0][fpu_recoded_data_width_gp-1:0] float_rf_rdata;
 
-    ,.w_v_i(float_rf_wen)
-    ,.w_addr_i(float_rf_waddr)
-    ,.w_data_i(float_rf_wdata)
+regfile #(
+  .width_p(fpu_recoded_data_width_gp)
+  ,.els_p(RV32_reg_els_gp)
+  ,.num_rs_p(3)                    
+  ,.num_rd_p(2)                    // ADDED: 2 write ports for dual-issue
+  ,.x0_tied_to_zero_p(0)           
+) float_rf (
+  .clk_i(clk_i)
+  ,.reset_i(reset_i)
 
-    ,.r_v_i(float_rf_read)
-    ,.r_addr_i({aligned_instruction[icache_dual_issue_p][31:27], aligned_instruction[icache_dual_issue_p].rs2, aligned_instruction[icache_dual_issue_p].rs1})
-    ,.r_data_o(float_rf_rdata)
-  );
+  ,.w_v_i(float_rf_wen)            // Now [1:0]
+  ,.w_addr_i(float_rf_waddr)       // Now [1:0][addr_width-1:0]
+  ,.w_data_i(float_rf_wdata)       // Now [1:0][data_width-1:0]
+
+  ,.r_v_i(float_rf_read)
+  ,.r_addr_i({aligned_instruction[icache_dual_issue_p][31:27], 
+              aligned_instruction[icache_dual_issue_p].rs2, 
+              aligned_instruction[icache_dual_issue_p].rs1})
+  ,.r_data_o(float_rf_rdata)
+);
+
 
 
   // FP scoreboard
   //
-  logic float_dependency;
+  logic [icache_dual_issue_p:0] float_dependency;
   logic float_sb_score;
   logic [reg_addr_width_lp-1:0] float_sb_score_id;
   logic float_sb_clear;
   logic [reg_addr_width_lp-1:0] float_sb_clear_id;
-
-  scoreboard #(
-    .els_p(RV32_reg_els_gp)
-    ,.x0_tied_to_zero_p(0)
-    ,.num_src_port_p(3)
-    ,.num_clear_port_p(1)
-  ) float_sb (
-    .clk_i(clk_i)
-    ,.reset_i(reset_i)
   
-    ,.src_id_i({id_r.instruction[31:27], id_r.instruction.rs2, id_r.instruction.rs1})
-    ,.dest_id_i(id_r.instruction.rd)
+  //WARNING: Assigned to 0, fix when updating execute stage and writeback stage logic!:
+  logic lane0_fp_score;
+  assign lane0_fp_score = '0;
+  logic [reg_addr_width_lp-1:0] lane0_fp_score_id;
+  assign lane0_fp_score_id = '0;
+  logic lane0_fp_sb_wb_clear;
+  assign lane0_fp_sb_wb_clear = '0;
+  logic [reg_addr_width_lp-1:0] lane0_fp_wb_clear_id;
+  assign lane0_fp_wb_clear_id = '0;
 
-    ,.op_reads_rf_i({id_r.decode.read_frs3, id_r.decode.read_frs2, id_r.decode.read_frs1})
-    ,.op_writes_rf_i(id_r.decode.write_frd)
 
-    ,.score_i(float_sb_score)
-    ,.score_id_i(float_sb_score_id)
+scoreboard #(
+  .els_p(RV32_reg_els_gp)
+  ,.x0_tied_to_zero_p(0)
+  ,.num_src_port_p(3)
+  ,.num_clear_port_p(2)
+  ,.num_score_port_p(2)
+  ,.dual_issue_enable_p(icache_dual_issue_p)
+) float_sb (
+  .clk_i(clk_i)
+  ,.reset_i(reset_i)
+  ,.src_id_i(id_issue_size_r ? {id_fp_r.instruction[31:27], id_fp_r.instruction.rs2, id_fp_r.instruction.rs1} : {id_r.instruction[31:27], id_r.instruction.rs2, id_r.instruction.rs1})
+  ,.dest_id_i(id_issue_size_r ? {id_r.instruction.rd , id_fp_r.instruction.rd}  : {id_fp_r.instruction.rd , id_r.instruction.rd} )
+  ,.op_reads_rf_i(id_issue_size_r ? {id_fp_r.decode.read_frs3, id_fp_r.decode.read_frs2, id_fp_r.decode.read_frs1} : {id_r.decode.read_frs3, id_r.decode.read_frs2, id_r.decode.read_frs1})
+  ,.op_writes_rf_i(id_issue_size_r ? {id_r.decode.write_frd, id_fp_r.decode.write_frd} : {'0, id_r.decode.write_frd})
+  ,.score_i({lane0_fp_score, float_sb_score})
+  ,.score_id_i({lane0_fp_score_id, float_sb_score_id})
+  ,.clear_i({lane0_fp_sb_wb_clear, float_sb_clear})
+  ,.clear_id_i({lane0_fp_wb_clear_id, float_sb_clear_id})
+  ,.dependency_o(float_dependency)
+);
 
-    ,.clear_i(float_sb_clear)
-    ,.clear_id_i(float_sb_clear_id)
-
-    ,.dependency_o(float_dependency)
-  );
 
   // FCSR
   //
@@ -1760,11 +1773,11 @@ endgenerate
 
 
   // FCSR control
-  assign fcsr_v_li = (id_r.decode.is_csr_op) & id_issue; 
-  assign fcsr_funct3_li = id_r.instruction.funct3;
-  assign fcsr_rs1_li = id_r.instruction.rs1;
-  assign fcsr_data_li = rs1_val_to_exe[7:0];
-  assign fcsr_addr_li = id_r.instruction[31:20];
+  assign fcsr_v_li = (id_issue_size_r ? id_fp_r.decode.is_csr_op : id_r.decode.is_csr_op) & id_issue;
+  assign fcsr_funct3_li = id_issue_size_r ? id_fp_r.instruction.funct3 : id_r.instruction.funct3;
+  assign fcsr_rs1_li = id_issue_size_r ? id_fp_r.instruction.rs1 : id_r.instruction.rs1;
+  assign fcsr_data_li = rs1_val_to_exe[7:0]; //TODO (Logic): Update after adding execute logic
+  assign fcsr_addr_li = id_issue_size_r ? id_fp_r.instruction[31:20] : id_r.instruction[31:20];
 
 
   // interrupt / CSR control
