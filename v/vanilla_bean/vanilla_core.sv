@@ -670,19 +670,49 @@ scoreboard #(
     ,.data_o(frs1_select_val)
   );
   
-  logic frs1_forward_v;
-  logic frs2_forward_v;
-  logic frs3_forward_v;
+  logic [icache_dual_issue_p-1:0] frs1_forward_sel;
+  logic [icache_dual_issue_p-1:0] frs2_forward_sel;
+  logic [icache_dual_issue_p-1:0] frs3_forward_sel;
   logic [fpu_recoded_data_width_gp-1:0] frs1_to_fp_exe;
   logic [fpu_recoded_data_width_gp-1:0] frs2_to_fp_exe;
   logic [fpu_recoded_data_width_gp-1:0] frs3_to_fp_exe;
 
+generate
+if (icache_dual_issue_p) begin: dual_issue_frs_to_fp_exe_forwarding
+  bsg_mux #(
+    .els_p(3)
+    ,.width_p(fpu_recoded_data_width_gp)
+  ) frs1_fwd_mux (
+    .data_i({float_rf_wdata[1], float_rf_wdata[0], frs1_select_val})
+    ,.sel_i(frs1_forward_sel)
+    ,.data_o(frs1_to_fp_exe)
+  );
+
+  bsg_mux #(
+    .els_p(3)
+    ,.width_p(fpu_recoded_data_width_gp)
+  ) frs2_fwd_mux (
+    .data_i({float_rf_wdata[1], float_rf_wdata[0], float_rf_rdata[1]})
+    ,.sel_i(frs2_forward_sel)
+    ,.data_o(frs2_to_fp_exe)
+  );
+
+  bsg_mux #(
+    .els_p(3)
+    ,.width_p(fpu_recoded_data_width_gp)
+  ) frs3_fwd_mux (
+    .data_i({float_rf_wdata[1], float_rf_wdata[0], float_rf_rdata[2]})
+    ,.sel_i(frs3_forward_sel)
+    ,.data_o(frs3_to_fp_exe)
+  );
+end
+else begin: dual_issue_frs_to_fp_exe_forwarding
   bsg_mux #(
     .els_p(2)
     ,.width_p(fpu_recoded_data_width_gp)
   ) frs1_fwd_mux (
     .data_i({float_rf_wdata, frs1_select_val})
-    ,.sel_i(frs1_forward_v)
+    ,.sel_i(frs1_forward_sel)
     ,.data_o(frs1_to_fp_exe)
   );
 
@@ -691,7 +721,7 @@ scoreboard #(
     ,.width_p(fpu_recoded_data_width_gp)
   ) frs2_fwd_mux (
     .data_i({float_rf_wdata, float_rf_rdata[1]})
-    ,.sel_i(frs2_forward_v)
+    ,.sel_i(frs2_forward_sel)
     ,.data_o(frs2_to_fp_exe)
   );
 
@@ -700,9 +730,12 @@ scoreboard #(
     ,.width_p(fpu_recoded_data_width_gp)
   ) frs3_fwd_mux (
     .data_i({float_rf_wdata, float_rf_rdata[2]})
-    ,.sel_i(frs3_forward_v)
+    ,.sel_i(frs3_forward_sel)
     ,.data_o(frs3_to_fp_exe)
   );
+end
+endgenerate
+
 
 
   // EXE FORWARDING MUX
@@ -1712,10 +1745,11 @@ scoreboard #(
 
   // FP_EXE forwarding mux control logic
   //
+  //TODO (Logic): Update this logic to support multiple waddr ad wen wires
   assign select_rs1_to_fp_exe = id_r.decode.read_rs1;
-  assign frs1_forward_v = id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr) & float_rf_wen;
-  assign frs2_forward_v = id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr) & float_rf_wen;
-  assign frs3_forward_v = id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr) & float_rf_wen;
+  assign frs1_forward_sel = {id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[0]) & float_rf_wen[0]};
+  assign frs2_forward_sel = {id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[0]) & float_rf_wen[0]};
+  assign frs3_forward_sel = {id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[0]) & float_rf_wen[0]};
 
   // EXE forwarding mux control logic
   // [0] = exe
@@ -1792,6 +1826,7 @@ scoreboard #(
   assign mcsr_barsend_li = id_r.decode.is_barsend_op & id_issue;
   assign stall_barrier = id_r.decode.is_barrecv_op & (barrier_data_i != barrier_data_o);
 
+  //TODO (Start here) Update logic to support dual_issue
   // ID -> EXE
   // update npc_r, when the pipeline is not stalled, and there is a valid instruction in EXE/FP_EXE;
   always_comb begin
@@ -2116,7 +2151,7 @@ scoreboard #(
     float_remote_load_resp_yumi_o = 1'b0;
     fdiv_fsqrt_yumi_li = 1'b0;
 
-    float_rf_wen = 1'b0;
+    float_rf_wen = 2'b00;
     float_rf_waddr = '0;
     float_rf_wdata = '0;
     select_remote_flw = 1'b0;
@@ -2130,9 +2165,9 @@ scoreboard #(
 
     if (float_remote_load_resp_force_i) begin
       select_remote_flw = 1'b1;
-      float_rf_wen = 1'b1;
-      float_rf_waddr = float_remote_load_resp_rd_i;
-      float_rf_wdata = flw_recoded_data;
+      float_rf_wen[1] = 1'b1;
+      float_rf_waddr[1] = float_remote_load_resp_rd_i;
+      float_rf_wdata[1] = flw_recoded_data;
       float_remote_load_resp_yumi_o = 1'b1;
       stall_remote_flw_wb = flw_wb_ctrl_r.valid | fpu_float_v_lo;
 
@@ -2141,23 +2176,23 @@ scoreboard #(
     end
     else if (flw_wb_ctrl_r.valid) begin
       select_remote_flw = 1'b0;
-      float_rf_wen = 1'b1;
-      float_rf_waddr = flw_wb_ctrl_r.rd_addr;
-      float_rf_wdata = flw_recoded_data; 
+      float_rf_wen[0] = 1'b1;
+      float_rf_waddr[0] = flw_wb_ctrl_r.rd_addr;
+      float_rf_wdata[0] = flw_recoded_data; 
     end
     else if (fpu_float_v_lo) begin
-      float_rf_wen = 1'b1;
-      float_rf_waddr = fpu_float_rd_lo;
-      float_rf_wdata = fpu_float_result_lo;
+      float_rf_wen[0] = 1'b1;
+      float_rf_waddr[0] = fpu_float_rd_lo;
+      float_rf_wdata[0] = fpu_float_result_lo;
       fcsr_fflags_v_li[1] = 1'b1;
       fcsr_fflags_li[1] = fpu_float_fflags_lo;
     end
     else begin
       if (fdiv_fsqrt_v_lo) begin
         fdiv_fsqrt_yumi_li = 1'b1;
-        float_rf_wen = 1'b1;
-        float_rf_waddr = fdiv_fsqrt_rd_lo;
-        float_rf_wdata = fdiv_fsqrt_result_lo;
+        float_rf_wen[0] = 1'b1;
+        float_rf_waddr[0] = fdiv_fsqrt_rd_lo;
+        float_rf_wdata[0] = fdiv_fsqrt_result_lo;
 
         float_sb_clear = 1'b1;
         float_sb_clear_id = fdiv_fsqrt_rd_lo;
@@ -2167,9 +2202,9 @@ scoreboard #(
       end
       else if (float_remote_load_resp_v_i) begin
         select_remote_flw = 1'b1;
-        float_rf_wen = 1'b1;
-        float_rf_waddr = float_remote_load_resp_rd_i;
-        float_rf_wdata = flw_recoded_data;
+        float_rf_wen[1] = 1'b1;
+        float_rf_waddr[1] = float_remote_load_resp_rd_i;
+        float_rf_wdata[1] = flw_recoded_data;
         float_remote_load_resp_yumi_o = 1'b1;
 
         float_sb_clear = 1'b1;
