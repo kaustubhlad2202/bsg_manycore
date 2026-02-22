@@ -128,13 +128,15 @@ module vanilla_core
   // pipeline signals
   // ctrl signals set to zero when reset_i is high.
   // data signals are not reset to zero.
-  logic id_en;  //TODO (optimize): Current logic issues when no stalls, later implement lanewise stall issuing!
-  logic exe_en, mem_ctrl_en, mem_data_en,
+  logic id_en, exe_en;  //TODO (optimize): Current logic issues when no stalls, later implement lanewise stall issuing!
+  logic mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
   id_signals_s [1:0] id_n;
   id_signals_s  id_r;
   id_signals_s  id_fp_r;  //We have an additional id_fp_r to store FP data incase of dual_issue
-  exe_signals_s exe_r, exe_n;
+  exe_signals_s [1:0] exe_n;
+  exe_signals_s exe_r;
+   exe_signals_s exe_fp_r;
   mem_ctrl_signals_s mem_ctrl_r, mem_ctrl_n;
   mem_data_signals_s mem_data_r, mem_data_n;
   wb_ctrl_signals_s wb_ctrl_r, wb_ctrl_n;
@@ -204,7 +206,7 @@ module vanilla_core
 
   logic [1:0][pc_width_lp-1:0] pc_plus4;
   assign pc_plus4[0] = pc_r[0] + 1'b1;
-  assign pc_plus4[1] = pc_r[dual_issue_eligible_lo] + 1'b1; //We ensure pc and pc_plus4[1] are same for single issue, TODO (optimize): can we get rid of this signal?
+  assign pc_plus4[1] = pc_r[dual_issue_eligible_lo] + 1'b1;  //We ensure pc and pc_plus4[1] are same for single issue, TODO (optimize): can we get rid of this signal?
 
   // ifetch counter
   logic [lg_icache_block_size_in_words_lp-1:0] ifetch_count_r;
@@ -219,18 +221,20 @@ module vanilla_core
     end
   end
 
+  logic id_issue_size_r, exe_issue_size_r;
   // debug pc
   // synopsys translate_off
   //TODO (Logic): look at the usage of signals and update the logic, all pcs defaulted to 0 right now
-  wire [data_width_p-1:0] if_pc = {{(data_width_p-pc_width_lp-2){1'b0}}, pc_r[0], 2'b00};
-  wire [data_width_p-1:0] id_pc = (id_r.pc_plus4 - 'd4);
-  wire [data_width_p-1:0] exe_pc = (exe_r.pc_plus4 - 'd4);
+  wire [data_width_p-1:0] if_pc = {{(data_width_p-pc_width_lp-2){1'b0}}, pc_r[dual_issue_eligible_lo], 2'b00};
+  wire [data_width_p-1:0] id_pc =  id_issue_size_r ? (id_fp_r.pc_plus4 - 'd4) : (id_r.pc_plus4 - 'd4);
+  wire [data_width_p-1:0] exe_pc = exe_issue_size_r ? (exe_fp_r.pc_plus4 - 'd4) : (exe_r.pc_plus4 - 'd4);
   // synopsys translate_on
  
   instruction_s [1:0] aligned_instruction;
   logic [1:0][pc_width_lp-1:0] aligned_pc_plus4;
   logic [1:0] lane_valid_lo;
   logic lane0_is_older_lo;
+
 
   generate
     //Allocating fetched instructions to the correct issue lane
@@ -287,7 +291,8 @@ generate
       .decode_o(),
       .fp_decode_o(fp_decode_dual)
     );
-
+    
+    //TODO (Optimize): Use the int_decode for this instead of a separate additional decoder
     cl_decode single_issue_decode (
       .instruction_i(aligned_instruction[0]),
       .decode_o(decode_single),
@@ -318,7 +323,7 @@ generate
   //////////////////////////////
 
 logic id_lane0_is_older_r;
-logic id_issue_size_r;
+
 
 generate
 if (icache_dual_issue_p) begin: dual_issue_decode_flops
@@ -363,6 +368,11 @@ if (icache_dual_issue_p) begin: dual_issue_decode_flops
     ,.data_i(id_n)
     ,.data_o(id_r)
   );
+
+  assign id_fp_r = '0;
+  assign id_issue_size_r = '0;
+  assign id_lane0_is_older_r = '0;
+
   end
 endgenerate
 
@@ -390,7 +400,7 @@ endgenerate
     ,.w_data_i(int_rf_wdata)
 
     ,.r_v_i(int_rf_read)
-    ,.r_addr_i({aligned_instruction[0].rs2, aligned_instruction[0].rs1}) //WARNING: Tied to 0, should read from 1 ie. FP lane but breaks sim
+    ,.r_addr_i({aligned_instruction[0].rs2, aligned_instruction[0].rs1})
     ,.r_data_o(int_rf_rdata)
   );
   
@@ -402,6 +412,8 @@ endgenerate
   logic [reg_addr_width_lp-1:0] int_sb_score_id;
   logic int_sb_clear;
   logic [reg_addr_width_lp-1:0] int_sb_clear_id;
+  logic lane0_fp_sb_clear;
+  logic [reg_addr_width_lp-1:0] lane0_fp_sb_clear_id;
 
   scoreboard #(
     .els_p(RV32_reg_els_gp)
@@ -467,16 +479,10 @@ regfile #(
   logic [reg_addr_width_lp-1:0] float_sb_score_id;
   logic float_sb_clear;
   logic [reg_addr_width_lp-1:0] float_sb_clear_id;
-  
-  //WARNING: Assigned to 0, fix when updating execute stage and writeback stage logic!:
   logic lane0_fp_score;
-  assign lane0_fp_score = '0;
   logic [reg_addr_width_lp-1:0] lane0_fp_score_id;
-  assign lane0_fp_score_id = '0;
   logic lane0_fp_sb_wb_clear;
-  assign lane0_fp_sb_wb_clear = '0;
   logic [reg_addr_width_lp-1:0] lane0_fp_wb_clear_id;
-  assign lane0_fp_wb_clear_id = '0;
 
 
 scoreboard #(
@@ -500,7 +506,7 @@ scoreboard #(
   ,.dependency_o(float_dependency)
 );
 
-
+  //TODO Understand FCSR
   // FCSR
   //
   logic fcsr_v_li;
@@ -801,9 +807,43 @@ endgenerate
     .clk_i(clk_i)
     ,.reset_i(reset_i)
     ,.en_i(exe_en)
-    ,.data_i(exe_n)
+    ,.data_i(exe_n[0])
     ,.data_o(exe_r)
   );
+
+   bsg_dff_reset_en #(
+    .width_p($bits(exe_signals_s))
+  ) exe_fp_pipeline (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(exe_en)
+    ,.data_i(exe_n[1])
+    ,.data_o(exe_fp_r)
+  );
+
+
+logic exe_lane0_is_older_r;
+
+  bsg_dff_reset_en #(
+    .width_p(1)
+  ) exe_pipeline_lane0_is_older (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(id_en)
+    ,.data_i(id_lane0_is_older_r)
+    ,.data_o(exe_lane0_is_older_r)
+  );
+
+     bsg_dff_reset_en #(
+    .width_p(1)
+  ) exe_issue_size (
+    .clk_i(clk_i)
+    ,.reset_i(reset_i)
+    ,.en_i(exe_en)
+    ,.data_i(id_issue_size_r)
+    ,.data_o(exe_issue_size_r)
+  );
+
 
 
 
@@ -963,13 +1003,13 @@ endgenerate
       npc_n = exe_r.pred_or_jump_addr[2+:pc_width_lp];
     end
     else begin
-      npc_n = exe_r.pc_plus4[2+:pc_width_lp];
+      npc_n = exe_issue_size_r? (exe_lane0_is_older_r ? exe_fp_r.pc_plus4[2+:pc_width_lp] : exe_r.pc_plus4[2+:pc_width_lp]): exe_r.pc_plus4[2+:pc_width_lp] ;
     end
   end
 
 
 
-
+  
   //////////////////////////////
   //                          //
   //      FP EXE STAGE        //
@@ -1089,7 +1129,7 @@ endgenerate
   );
 
 
-  
+  //START RTL UPDATES FROM HERE
 
   //////////////////////////////
   //                          //
@@ -1460,7 +1500,7 @@ endgenerate
     };
 
     //Packet for FP Lane
-    id_n[1] = '{
+    id_n[1] = dual_issue_eligible_lo ? '{
       pc_plus4: {{(data_width_p-pc_width_lp-2){1'b0}}, aligned_pc_plus4[1], 2'b0},
       pred_or_jump_addr: '0,
       instruction: aligned_instruction[1],
@@ -1469,7 +1509,7 @@ endgenerate
       icache_miss: 1'b0,
       valid: dual_issue_eligible_lo,
       branch_predicted_taken:  '0
-    };
+    } : '0;
 
     if (stall_all) begin
       id_en = 1'b0;
@@ -1510,7 +1550,6 @@ endgenerate
           valid: 1'b0,
           branch_predicted_taken: 1'b0
         };
-
       end
       else begin
         // common case
@@ -1566,6 +1605,7 @@ endgenerate
           valid: 1'b0,
           branch_predicted_taken: 1'b0
         };
+        id_n[1] = '0;
 
 
       end
@@ -1592,6 +1632,10 @@ endgenerate
   wire [reg_addr_width_lp-1:0] id_rs1 = id_r.instruction.rs1;
   wire [reg_addr_width_lp-1:0] id_rs2 = id_r.instruction.rs2;
   wire [reg_addr_width_lp-1:0] id_rs3 = id_r.instruction[31:27];
+  wire [reg_addr_width_lp-1:0] id_fp_rs1 = id_issue_size_r ? id_fp_r.instruction.rs1 : id_r.instruction.rs1;
+  wire [reg_addr_width_lp-1:0] id_fp_rs2 = id_issue_size_r ? id_fp_r.instruction.rs2 : id_r.instruction.rs2;
+  wire [reg_addr_width_lp-1:0] id_fp_rs3 = id_issue_size_r ? id_fp_r.instruction[31:27] : id_r.instruction[31:27];
+  //START FROM HERE
   wire [reg_addr_width_lp-1:0] id_rd = id_r.instruction.rd;
   wire remote_req_in_exe = lsu_remote_req_v_lo;
   wire local_load_in_exe = lsu_dmem_v_lo & ~lsu_dmem_w_lo;
@@ -1602,46 +1646,72 @@ endgenerate
   wire float_remote_load_in_exe = remote_req_in_exe & exe_r.decode.is_load_op & exe_r.decode.write_frd;
   wire fdiv_fsqrt_in_fp_exe = fp_exe_ctrl_r.fp_decode.is_fdiv_op | fp_exe_ctrl_r.fp_decode.is_fsqrt_op;
   wire remote_credit_pending = (out_credits_used_i != '0);
-  wire id_rs1_equal_exe_rd = (id_rs1 == exe_r.instruction.rd);
-  wire id_rs2_equal_exe_rd = (id_rs2 == exe_r.instruction.rd);
-  wire id_rs3_equal_exe_rd = (id_rs3 == exe_r.instruction.rd);
+
+
   wire id_rs1_equal_fp_exe_rd = (id_rs1 == fp_exe_ctrl_r.rd);
   wire id_rs2_equal_fp_exe_rd = (id_rs2 == fp_exe_ctrl_r.rd);
   wire id_rs3_equal_fp_exe_rd = (id_rs3 == fp_exe_ctrl_r.rd);
+
+  wire id_frs1_equal_fp_exe_rd = (id_fp_rs1 == fp_exe_ctrl_r.rd);
+  wire id_frs2_equal_fp_exe_rd = (id_fp_rs2 == fp_exe_ctrl_r.rd);
+  wire id_frs3_equal_fp_exe_rd = (id_fp_rs3 == fp_exe_ctrl_r.rd);
+
+
   wire id_rs1_equal_mem_rd = (id_rs1 == mem_ctrl_r.rd_addr);
   wire id_rs2_equal_mem_rd = (id_rs2 == mem_ctrl_r.rd_addr);
   wire id_rs3_equal_mem_rd = (id_rs3 == mem_ctrl_r.rd_addr);
+
+  wire id_frs1_equal_mem_rd = (id_fp_rs1 == mem_ctrl_r.rd_addr);
+  wire id_frs2_equal_mem_rd = (id_fp_rs2 == mem_ctrl_r.rd_addr);
+  wire id_frs3_equal_mem_rd = (id_fp_rs3 == mem_ctrl_r.rd_addr);
+
+  //Signal is only for EXE stage and INT RF WB
   wire id_rs1_equal_wb_rd = (id_rs1 == wb_ctrl_r.rd_addr);
   wire id_rs2_equal_wb_rd = (id_rs2 == wb_ctrl_r.rd_addr);
 
+
   // stall_depend_long_op (idiv, fdiv, remote_load, atomic)
   wire rs1_sb_clear_now = id_r.decode.read_rs1 & (id_rs1 == int_sb_clear_id) & int_sb_clear & id_rs1_non_zero; 
-  wire frs2_sb_clear_now = id_r.decode.read_frs2 & (id_rs2 == float_sb_clear_id) & float_sb_clear;
+  wire frs2_sb_clear_now = id_issue_size_r ? (id_fp_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == lane0_fp_sb_clear_id) & lane0_fp_sb_clear))) : (id_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == lane0_fp_sb_clear_id) & lane0_fp_sb_clear)));
 
+  //If Dual, stall on either dependence, if single issue original Logic
   assign stall_depend_long_op = (int_dependency | float_dependency)
-    | (id_r.decode.is_fp_op
-        ? rs1_sb_clear_now
-        : frs2_sb_clear_now);
+    |  (id_issue_size_r ? (rs1_sb_clear_now | frs2_sb_clear_now) :
+                       (id_r.decode.is_fp_op ? rs1_sb_clear_now : frs2_sb_clear_now)
+        );
   
 
   // stall_depend_local_load (lw, flw, lr, lr.aq)
+  // If dual_issue, check both decode and exe stage for dual issue and accordingly match registers
   assign stall_depend_local_load = local_load_in_exe &
-    ((id_r.decode.read_rs1  & id_rs1_equal_exe_rd & exe_r.decode.write_rd & id_rs1_non_zero)
-    |(id_r.decode.read_rs2  & id_rs2_equal_exe_rd & exe_r.decode.write_rd & id_rs2_non_zero)
-    |(id_r.decode.read_frs1 & id_rs1_equal_exe_rd & exe_r.decode.write_frd)
-    |(id_r.decode.read_frs2 & id_rs2_equal_exe_rd & exe_r.decode.write_frd)
-    |(id_r.decode.read_frs3 & id_rs3_equal_exe_rd & exe_r.decode.write_frd));
+    ((id_r.decode.read_rs1  & id_rs1_equal_fp_exe_rd & exe_r.decode.write_rd & id_rs1_non_zero)
+    |(id_r.decode.read_rs2  & id_rs2_equal_fp_exe_rd & exe_r.decode.write_rd & id_rs2_non_zero)
+    |(id_issue_size_r ?  (id_fp_r.decode.read_frs1 & id_frs1_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd)) : (id_r.decode.read_frs1 & id_frs1_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd)))
+    |(id_issue_size_r ?  (id_fp_r.decode.read_frs2 & id_frs2_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd)) : (id_r.decode.read_frs2 & id_frs2_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd)))
+    |(id_issue_size_r ?  (id_fp_r.decode.read_frs3 & id_frs3_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd)) : (id_r.decode.read_frs3 & id_frs3_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_frd : exe_r.decode.write_frd))));
 
 
   // stall_depend_imul
   assign stall_depend_imul = exe_r.decode.is_imul_op &
-    ((id_r.decode.read_rs1 & id_rs1_equal_exe_rd & id_rs1_non_zero)
-    |(id_r.decode.read_rs2 & id_rs2_equal_exe_rd & id_rs2_non_zero));
+    ((id_r.decode.read_rs1 & id_rs1_equal_fp_exe_rd & id_rs1_non_zero)
+    |(id_r.decode.read_rs2 & id_rs2_equal_fp_exe_rd & id_rs2_non_zero));
 
 
   // stall_bypass
+  //Incase of dual issue, updated the appropriate decode registers in the decode stage
   wire stall_bypass_fp_frs = 
-     (id_r.decode.read_frs1 & id_rs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
+    id_issue_size_r ?
+    ((id_fp_r.decode.read_frs1 & id_frs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
+    |(id_fp_r.decode.read_frs2 & id_frs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
+    |(id_fp_r.decode.read_frs3 & id_frs3_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
+    |(id_fp_r.decode.read_frs1 & (id_fp_rs1 == fpu1_rd_r) & fpu1_v_r)
+    |(id_fp_r.decode.read_frs2 & (id_fp_rs2 == fpu1_rd_r) & fpu1_v_r)
+    |(id_fp_r.decode.read_frs3 & (id_fp_rs3 == fpu1_rd_r) & fpu1_v_r)
+    |(id_fp_r.decode.read_frs1 & id_frs1_equal_mem_rd & mem_ctrl_r.write_frd)
+    |(id_fp_r.decode.read_frs2 & id_frs2_equal_mem_rd & mem_ctrl_r.write_frd)
+    |(id_fp_r.decode.read_frs3 & id_frs3_equal_mem_rd & mem_ctrl_r.write_frd))
+
+  : ((id_r.decode.read_frs1 & id_rs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_r.decode.read_frs2 & id_rs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_r.decode.read_frs3 & id_rs3_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_r.decode.read_frs1 & (id_rs1 == fpu1_rd_r) & fpu1_v_r)
@@ -1649,25 +1719,35 @@ endgenerate
     |(id_r.decode.read_frs3 & (id_rs3 == fpu1_rd_r) & fpu1_v_r)
     |(id_r.decode.read_frs1 & id_rs1_equal_mem_rd & mem_ctrl_r.write_frd)
     |(id_r.decode.read_frs2 & id_rs2_equal_mem_rd & mem_ctrl_r.write_frd)
-    |(id_r.decode.read_frs3 & id_rs3_equal_mem_rd & mem_ctrl_r.write_frd);
+    |(id_r.decode.read_frs3 & id_rs3_equal_mem_rd & mem_ctrl_r.write_frd));
 
   wire stall_bypass_fp_rs1 = (id_r.decode.read_rs1 & id_rs1_non_zero) &
     ((id_rs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_int_op)
     |((id_rs1 == imul_rd_lo) & imul_v_lo)
-    |(id_rs1_equal_exe_rd & exe_r.decode.write_rd)
+    |(id_rs1_equal_fp_exe_rd & (exe_issue_size_r ? exe_fp_r.decode.write_rd : exe_r.decode.write_rd))
     |(id_rs1_equal_mem_rd & mem_ctrl_r.write_rd)
     |(id_rs1_equal_wb_rd & wb_ctrl_r.write_rd));
   
 
-  wire stall_bypass_int_frs2 = id_r.decode.read_frs2 &
+  wire stall_bypass_int_frs2 = id_issue_size_r ? 
+    (id_fp_r.decode.read_frs2 &
+    ((id_frs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
+    |((id_fp_rs2 == fpu1_rd_r) & fpu1_v_r)
+    |((id_fp_rs2 == fpu_float_rd_lo) & fpu_float_v_lo)
+    |(id_frs2_equal_mem_rd & mem_ctrl_r.write_frd)
+    |((id_fp_rs2 == flw_wb_ctrl_r.rd_addr) & flw_wb_ctrl_r.valid)))
+    
+  : (id_r.decode.read_frs2 &
     ((id_rs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |((id_rs2 == fpu1_rd_r) & fpu1_v_r)
     |((id_rs2 == fpu_float_rd_lo) & fpu_float_v_lo)
     |(id_rs2_equal_mem_rd & mem_ctrl_r.write_frd)
-    |((id_rs2 == flw_wb_ctrl_r.rd_addr) & flw_wb_ctrl_r.valid));
+    |((id_rs2 == flw_wb_ctrl_r.rd_addr) & flw_wb_ctrl_r.valid)));
     
-
-  assign stall_bypass = id_r.decode.is_fp_op
+//If we are dual issuing, any lane stall should cause a total stall
+  assign stall_bypass = id_issue_size_r ? 
+   (stall_bypass_fp_frs | stall_bypass_fp_rs1 | stall_bypass_int_frs2)
+  : id_r.decode.is_fp_op
     ? (stall_bypass_fp_frs | stall_bypass_fp_rs1)
     : stall_bypass_int_frs2;
 
@@ -1720,17 +1800,40 @@ endgenerate
   assign stall_remote_credit = id_remote_req_op & ((credit_sum >= credit_limit_r) | credit_cout);
 
   // stall_fdiv_busy
-  assign stall_fdiv_busy = (id_r.fp_decode.is_fdiv_op | id_r.fp_decode.is_fsqrt_op) & (fdiv_fsqrt_ready_and_lo
+  assign stall_fdiv_busy = id_issue_size_r ? 
+    (id_fp_r.fp_decode.is_fdiv_op | id_fp_r.fp_decode.is_fsqrt_op) & (fdiv_fsqrt_ready_and_lo
+    ? (fp_exe_ctrl_r.fp_decode.is_fdiv_op | fp_exe_ctrl_r.fp_decode.is_fsqrt_op)
+    : 1'b1)
+
+  : (id_r.fp_decode.is_fdiv_op | id_r.fp_decode.is_fsqrt_op) & (fdiv_fsqrt_ready_and_lo
     ? (fp_exe_ctrl_r.fp_decode.is_fdiv_op | fp_exe_ctrl_r.fp_decode.is_fsqrt_op)
     : 1'b1);
 
+
   // stall_idiv_busy
-  assign stall_idiv_busy = id_r.decode.is_idiv_op & (idiv_ready_and_lo
-    ? exe_r.decode.is_idiv_op
-    : 1'b1);
+  assign stall_idiv_busy = id_issue_size_r ?
+  ( id_fp_r.decode.is_idiv_op & (idiv_ready_and_lo
+    ? (exe_issue_size_r ? exe_fp_r.decode.is_idiv_op :exe_r.decode.is_idiv_op)
+    : 1'b1)) :
+  ( id_r.decode.is_idiv_op & (idiv_ready_and_lo
+    ? (exe_issue_size_r ? exe_fp_r.decode.is_idiv_op :exe_r.decode.is_idiv_op)
+    : 1'b1));
 
   // stall_fcsr
-  assign stall_fcsr = (id_r.decode.is_csr_op)
+  assign stall_fcsr = id_issue_size_r ? 
+    ((id_fp_r.decode.is_csr_op)
+    & ((id_fp_r.instruction[31:20] == `RV32_CSR_FFLAGS_ADDR)
+      |(id_fp_r.instruction[31:20] == `RV32_CSR_FCSR_ADDR))
+    & (fp_exe_ctrl_r.fp_decode.is_fpu_float_op
+      |fp_exe_ctrl_r.fp_decode.is_fpu_int_op
+      |fp_exe_ctrl_r.fp_decode.is_fdiv_op
+      |fp_exe_ctrl_r.fp_decode.is_fsqrt_op
+      |(~fdiv_fsqrt_ready_and_lo)
+      |fdiv_fsqrt_v_lo
+      |fpu1_v_r
+      |fpu_float_v_lo))
+
+  : ((id_r.decode.is_csr_op)
     & ((id_r.instruction[31:20] == `RV32_CSR_FFLAGS_ADDR)
       |(id_r.instruction[31:20] == `RV32_CSR_FCSR_ADDR))
     & (fp_exe_ctrl_r.fp_decode.is_fpu_float_op
@@ -1740,16 +1843,16 @@ endgenerate
       |(~fdiv_fsqrt_ready_and_lo)
       |fdiv_fsqrt_v_lo
       |fpu1_v_r
-      |fpu_float_v_lo);
+      |fpu_float_v_lo));
 
 
   // FP_EXE forwarding mux control logic
   //
   //TODO (Logic): Update this logic to support multiple waddr ad wen wires
   assign select_rs1_to_fp_exe = id_r.decode.read_rs1;
-  assign frs1_forward_sel = {id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[0]) & float_rf_wen[0]};
-  assign frs2_forward_sel = {id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[0]) & float_rf_wen[0]};
-  assign frs3_forward_sel = {id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[0]) & float_rf_wen[0]};
+  assign frs1_forward_sel = id_issue_size_r ? {id_fp_r.decode.read_frs1 & (id_fp_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_fp_r.decode.read_frs1 & (id_fp_rs1 == float_rf_waddr[0]) & float_rf_wen[0]} : {id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[0]) & float_rf_wen[0]};
+  assign frs2_forward_sel = id_issue_size_r ? {id_fp_r.decode.read_frs2 & (id_fp_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_fp_r.decode.read_frs2 & (id_fp_rs2 == float_rf_waddr[0]) & float_rf_wen[0]} : {id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[0]) & float_rf_wen[0]};
+  assign frs3_forward_sel = id_issue_size_r ? {id_fp_r.decode.read_frs3 & (id_fp_rs3 == float_rf_waddr[1]) & float_rf_wen[1], id_fp_r.decode.read_frs3 & (id_fp_rs3 == float_rf_waddr[0]) & float_rf_wen[0]} : {id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs3 & (id_rs3 == float_rf_waddr[0]) & float_rf_wen[0]};
 
   // EXE forwarding mux control logic
   // [0] = exe
@@ -1759,7 +1862,7 @@ endgenerate
   logic [2:0] has_forward_data_rs2;
 
   assign has_forward_data_rs1[0] =
-    ((exe_r.decode.write_rd & id_rs1_equal_exe_rd)
+    ((exe_r.decode.write_rd & id_rs1_equal_fp_exe_rd)
     |(fp_exe_ctrl_r.fp_decode.is_fpu_int_op & id_rs1_equal_fp_exe_rd))
     & id_rs1_non_zero;
   assign has_forward_data_rs1[1] =
@@ -1780,7 +1883,7 @@ endgenerate
   );
 
   assign has_forward_data_rs2[0] =
-    ((exe_r.decode.write_rd & id_rs2_equal_exe_rd)
+    ((exe_r.decode.write_rd & id_rs2_equal_fp_exe_rd)
     |(fp_exe_ctrl_r.fp_decode.is_fpu_int_op & id_rs2_equal_fp_exe_rd))
     & id_rs2_non_zero;
   assign has_forward_data_rs2[1] =
@@ -1810,13 +1913,13 @@ endgenerate
   assign fcsr_v_li = (id_issue_size_r ? id_fp_r.decode.is_csr_op : id_r.decode.is_csr_op) & id_issue;
   assign fcsr_funct3_li = id_issue_size_r ? id_fp_r.instruction.funct3 : id_r.instruction.funct3;
   assign fcsr_rs1_li = id_issue_size_r ? id_fp_r.instruction.rs1 : id_r.instruction.rs1;
-  assign fcsr_data_li = rs1_val_to_exe[7:0]; //TODO (Logic): Update after adding execute logic
+  assign fcsr_data_li = rs1_val_to_exe[7:0]; //TODO (Logic): Update 
   assign fcsr_addr_li = id_issue_size_r ? id_fp_r.instruction[31:20] : id_r.instruction[31:20];
 
 
   // interrupt / CSR control
   assign mcsr_we_li = (id_r.decode.is_csr_op) & id_issue;
-  assign mcsr_data_li = rs1_val_to_exe;
+  assign mcsr_data_li = rs1_val_to_exe; //TODO (Logic): Update 
   assign mcsr_instr_executed_li = id_r.valid & id_issue & mstatus_r.mie; // trace interrupt pending can be set outside interrupt.
   assign mcsr_interrupt_entered_li = interrupt_ready & ~stall_all;
   assign mcsr_mret_called_li = exe_r.decode.is_mret_op & ~stall_all;
@@ -1826,12 +1929,12 @@ endgenerate
   assign mcsr_barsend_li = id_r.decode.is_barsend_op & id_issue;
   assign stall_barrier = id_r.decode.is_barrecv_op & (barrier_data_i != barrier_data_o);
 
-  //TODO (Start here) Update logic to support dual_issue
   // ID -> EXE
-  // update npc_r, when the pipeline is not stalled, and there is a valid instruction in EXE/FP_EXE;
-  always_comb begin
-    // common case
-    exe_n = '{
+  // update npc_r, when the pipeline is not stalled, and there is a valid instruction in EXE/FP_EXE
+generate
+   if (icache_dual_issue_p) begin: dual_issue_execute_packet
+      always_comb begin
+      exe_n[0] = '{
       pc_plus4: id_r.pc_plus4,
       valid: id_r.valid,
       pred_or_jump_addr: id_r.pred_or_jump_addr,
@@ -1850,6 +1953,76 @@ endgenerate
       branch_predicted_taken: id_r.branch_predicted_taken
     };
 
+    exe_n[1] = id_issue_size_r ? '{
+          pc_plus4: id_fp_r.pc_plus4,
+          valid: id_fp_r.valid,
+          pred_or_jump_addr: '0,
+          instruction: '0,
+          decode: '0,
+          rs1_val: '0,
+          rs2_val: '0,
+          mem_addr_op2: '0,
+          icache_miss: 1'b0,
+          branch_predicted_taken: 1'b0
+        }  :'0;
+
+    if (stall_all) begin
+      exe_en = 1'b0;
+      npc_write_en = 1'b0;
+    end
+    else begin
+      npc_write_en = (exe_r.valid & mstatus_r.mie) | exe_r.decode.is_mret_op; //TODO (Logic): Does this need an update?
+      if (flush | stall_id) begin
+        exe_en = 1'b1;
+        exe_n = '0;
+      end
+      else if (id_r.decode.is_fp_op) begin
+        // for fp_op, we still want to keep track of npc_r.
+        // so we set the valid and pc_plus4.
+        exe_en = 1'b1;
+        exe_n[0] = '{
+          pc_plus4: id_r.pc_plus4,
+          valid: id_r.valid,
+          pred_or_jump_addr: '0,
+          instruction: '0,
+          decode: '0,
+          rs1_val: '0,
+          rs2_val: '0,
+          mem_addr_op2: '0,
+          icache_miss: 1'b0,
+          branch_predicted_taken: 1'b0
+        };
+        exe_n[1] = '0; //id_r will be fp_op only iff it is single issue, we dont need a redundant single issue check
+      end
+      else begin
+        exe_en = 1'b1;
+      end
+    end
+      end // always_comb
+   end
+   else begin: single_issue_execute_packet
+      always_comb begin
+    exe_n[0] = '{
+      pc_plus4: id_r.pc_plus4,
+      valid: id_r.valid,
+      pred_or_jump_addr: id_r.pred_or_jump_addr,
+      instruction: id_r.instruction,
+      decode: id_r.decode,
+      rs1_val: rs1_val_to_exe,
+      // rs2_val carries csr load values
+      // if csr addr matches any of fcsr addr, then fcsr_data_v_lo will be asserted.
+      rs2_val: (id_r.decode.is_csr_op
+                    ? (fcsr_data_v_lo
+                      ? (data_width_p)'(fcsr_data_lo)
+                      : mcsr_data_lo)
+                    : rs2_val_to_exe),
+      mem_addr_op2: mem_addr_op2,
+      icache_miss: id_r.icache_miss,
+      branch_predicted_taken: id_r.branch_predicted_taken
+    };
+
+    exe_n[1] = '0;
+
     if (stall_all) begin
       exe_en = 1'b0;
       npc_write_en = 1'b0;
@@ -1864,7 +2037,7 @@ endgenerate
         // for fp_op, we still want to keep track of npc_r.
         // so we set the valid and pc_plus4.
         exe_en = 1'b1;
-        exe_n = '{
+        exe_n[0] = '{
           pc_plus4: id_r.pc_plus4,
           valid: id_r.valid,
           pred_or_jump_addr: '0,
@@ -1876,12 +2049,17 @@ endgenerate
           icache_miss: 1'b0,
           branch_predicted_taken: 1'b0
         };
+        exe_n[1] = '0;
       end
       else begin
         exe_en = 1'b1;
       end
     end
+      end // always_comb
   end
+endgenerate
+
+
 
   // idiv input control
   assign idiv_v_li = exe_r.decode.is_idiv_op & ~stall_all;
@@ -1900,12 +2078,22 @@ endgenerate
 
   // ID -> FP_EXE
   frm_e fpu_rm;
-  assign fpu_rm = frm_e'((id_r.instruction.funct3 == eDYN)
+  assign fpu_rm = id_issue_size_r ? (frm_e'((id_fp_r.instruction.funct3 == eDYN)
     ? frm_r
-    : id_r.instruction.funct3);
+    : id_fp_r.instruction.funct3)) : 
+    (frm_e'((id_r.instruction.funct3 == eDYN)
+    ? frm_r
+    : id_r.instruction.funct3));
+
 
   always_comb begin
-    fp_exe_ctrl_n = '{
+    fp_exe_ctrl_n = id_issue_size_r ? 
+    '{
+      rd: id_fp_r.instruction.rd,
+      fp_decode: id_fp_r.fp_decode,
+      rm: fpu_rm
+
+    } : '{
       rd: id_r.instruction.rd,
       fp_decode: id_r.fp_decode,
       rm: fpu_rm
@@ -1921,7 +2109,7 @@ endgenerate
       fp_exe_data_en = 1'b0;
     end
     else begin
-      if (flush | stall_id | ~id_r.decode.is_fp_op) begin
+      if (flush | stall_id | ~id_r.decode.is_fp_op & ~id_issue_size_r) begin
         // put nop in fp_exe.
         // we hold the data inputs steady in the case of a stall,
         // or if there is not a floating point operation
@@ -1944,12 +2132,13 @@ endgenerate
   assign fdiv_fsqrt_v_li = fdiv_fsqrt_in_fp_exe & ~stall_all;
 
   // FP scoreboard set logic
-  assign float_sb_score = ~stall_all & (fdiv_fsqrt_in_fp_exe | float_remote_load_in_exe);
-  assign float_sb_score_id = fdiv_fsqrt_in_fp_exe
-    ? fp_exe_ctrl_r.rd
-    : exe_r.instruction.rd;
+  assign float_sb_score = ~stall_all & (fdiv_fsqrt_in_fp_exe );
+  assign lane0_fp_score = ~stall_all & (float_remote_load_in_exe);
+  assign float_sb_score_id = fp_exe_ctrl_r.rd;
+  assign lane0_fp_score_id = exe_r.instruction.rd;
 
-
+ //TODO : Update ALU Stage FP scoreboard logic
+ //START HERE
   // EXE,FP_EXE -> MEM
   always_comb begin
     // common case
@@ -2159,10 +2348,14 @@ endgenerate
     float_sb_clear = 1'b0;
     float_sb_clear_id = float_remote_load_resp_rd_i;
 
+    lane0_fp_sb_clear = 1'b0;
+    lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
+
     fcsr_fflags_v_li[1] = 1'b0;
     fcsr_fflags_li[1] = fpu_float_fflags_lo;
     
-
+    //TODO (Logic Fix): In case of single issue, float_remote_load_resp_force_i should wb through 0, only in dual issue it should wb through 1? But current logic should work since 1 is empty during single issue too?
+    //TODO This logic breaks when run in single issue parameter mode, make it sound
     if (float_remote_load_resp_force_i) begin
       select_remote_flw = 1'b1;
       float_rf_wen[1] = 1'b1;
@@ -2171,10 +2364,11 @@ endgenerate
       float_remote_load_resp_yumi_o = 1'b1;
       stall_remote_flw_wb = flw_wb_ctrl_r.valid | fpu_float_v_lo;
 
-      float_sb_clear = 1'b1;
-      float_sb_clear_id = float_remote_load_resp_rd_i;
+      lane0_fp_sb_clear = 1'b1;
+      lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
     end
-    else if (flw_wb_ctrl_r.valid) begin
+    //Removed else if since In dual issue, both cases can happen?
+    if (flw_wb_ctrl_r.valid) begin
       select_remote_flw = 1'b0;
       float_rf_wen[0] = 1'b1;
       float_rf_waddr[0] = flw_wb_ctrl_r.rd_addr;
@@ -2200,15 +2394,16 @@ endgenerate
         fcsr_fflags_v_li[1] = 1'b1;
         fcsr_fflags_li[1] = fdiv_fsqrt_fflags_lo;
       end
-      else if (float_remote_load_resp_v_i) begin
+      //Removed else since both conditions can be true
+      if (float_remote_load_resp_v_i) begin
         select_remote_flw = 1'b1;
         float_rf_wen[1] = 1'b1;
         float_rf_waddr[1] = float_remote_load_resp_rd_i;
         float_rf_wdata[1] = flw_recoded_data;
         float_remote_load_resp_yumi_o = 1'b1;
 
-        float_sb_clear = 1'b1;
-        float_sb_clear_id = float_remote_load_resp_rd_i;
+        lane0_fp_sb_clear = 1'b1;
+        lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
       end
     end
   end
