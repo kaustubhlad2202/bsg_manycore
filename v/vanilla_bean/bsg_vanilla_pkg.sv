@@ -257,6 +257,8 @@ typedef struct packed {
     logic local_load;
     logic [1:0] byte_sel;
     logic icache_miss;
+    logic write_frd_dual_issue;
+    logic [RV32_reg_addr_width_gp-1:0] frd_addr_dual_issue;
 } mem_ctrl_signals_s;
 
 typedef struct packed {

@@ -1156,6 +1156,15 @@ logic exe_lane0_is_older_r;
     ,.data_o(mem_data_r)
   );
 
+    bsg_dff_en #(
+    .width_p(1)
+  ) mem_issue_size (
+    .clk_i(clk_i)
+    ,.en_i(mem_data_en)
+    ,.data_i(exe_issue_size_r)
+    ,.data_o(mem_issue_size_r)
+  );
+
   logic dmem_v_li;
   logic dmem_w_li;
   logic [data_width_p-1:0] dmem_data_li;
@@ -1271,6 +1280,15 @@ logic exe_lane0_is_older_r;
     .clk_i(clk_i)
     ,.data_i(wb_data_n)
     ,.data_o(wb_data_r)
+  );
+
+      bsg_dff_en #(
+    .width_p(1)
+  ) wb_issue_size (
+    .clk_i(clk_i)
+    ,.en_i(mem_data_en)
+    ,.data_i(mem_issue_size_r)
+    ,.data_o(wb_issue_size_r)
   );
 
   //////////////////////////////
@@ -2151,7 +2169,9 @@ endgenerate
       is_load_unsigned: exe_r.decode.is_load_unsigned,
       local_load: local_load_in_exe,
       byte_sel: lsu_byte_sel_lo,
-      icache_miss: exe_r.icache_miss
+      icache_miss: exe_r.icache_miss,
+      write_frd_dual_issue: exe_issue_size_r ? exe_fp_r.decode.write_frd : '0,
+      frd_addr_dual_issue: exe_issue_size_r ? exe_fp_r.instruction.rd : '0
     };
     mem_data_n = '{
       exe_result: alu_or_csr_result
@@ -2183,7 +2203,9 @@ endgenerate
         is_load_unsigned: 1'b0,
         local_load: 1'b0,
         byte_sel: '0,
-        icache_miss: 1'b0
+        icache_miss: 1'b0,
+        write_frd_dual_issue:'0,
+        frd_addr_dual_issue: '0
       };      
       mem_data_n = '{
         exe_result: fpu_int_result_lo
@@ -2334,83 +2356,113 @@ endgenerate
   // FP_WB
   // fcsr exception handling
   // float scoreboard clear logic
-  always_comb begin
-    stall_remote_flw_wb = 1'b0;
+// -----------------------------------------------------------------------------
+// FP_WB STAGE (2 write ports: port0 = loads, port1 = compute)
+// -----------------------------------------------------------------------------
 
-    float_remote_load_resp_yumi_o = 1'b0;
-    fdiv_fsqrt_yumi_li = 1'b0;
+always_comb begin
+  // Default: no stalls, no writes, no scoreboard clears, no fflags
+  stall_remote_flw_wb          = 1'b0;
 
-    float_rf_wen = 2'b00;
-    float_rf_waddr = '0;
-    float_rf_wdata = '0;
+  float_remote_load_resp_yumi_o = 1'b0;
+  fdiv_fsqrt_yumi_li            = 1'b0;
+
+  float_rf_wen    = '0;  // [1:0]
+  float_rf_waddr  = '0;  // [1:0][reg_addr_width_lp-1:0]
+  float_rf_wdata  = '0;  // [1:0][fpu_recoded_data_width_gp-1:0]
+
+  select_remote_flw = 1'b0;
+
+  // Scoreboard clear
+  lane0_fp_sb_wb_clear  = 1'b0;
+  lane0_fp_wb_clear_id  = '0;
+
+  float_sb_clear    = 1'b0;
+  float_sb_clear_id = '0;
+
+  // FCSR FP port (index 1)
+  fcsr_fflags_v_li[1] = 1'b0;
+  fcsr_fflags_li[1]   = '0;
+
+  // ---------------------------------------------------------------------------
+  // Port 0: FP loads (local FLW_WB or remote FLW)
+  // ---------------------------------------------------------------------------
+
+  // Highest priority: forced remote FP load completion
+  if (float_remote_load_resp_force_i) begin
+    select_remote_flw              = 1'b1;
+    float_rf_wen[0]                = 1'b1;
+    float_rf_waddr[0]              = float_remote_load_resp_rd_i;
+    float_rf_wdata[0]              = flw_recoded_data;
+    float_remote_load_resp_yumi_o  = 1'b1;
+
+    // If there is also a local FLW in the same cycle, stall it
+    stall_remote_flw_wb = flw_wb_ctrl_r.valid;
+
+    // Clear lane0 scoreboard entry for this remote load
+    lane0_fp_sb_wb_clear = 1'b1;
+    lane0_fp_wb_clear_id = float_remote_load_resp_rd_i;
+  end
+  // Next: local FP load from FLW_WB
+  else if (flw_wb_ctrl_r.valid) begin
     select_remote_flw = 1'b0;
+    float_rf_wen[0]   = 1'b1;
+    float_rf_waddr[0] = flw_wb_ctrl_r.rd_addr;
+    float_rf_wdata[0] = flw_recoded_data;
+    // no scoreboard clear; local FLW is not scored
+  end
+  // Next: normal remote FP load
+  else if (float_remote_load_resp_v_i) begin
+    select_remote_flw             = 1'b1;
+    float_rf_wen[0]               = 1'b1;
+    float_rf_waddr[0]             = float_remote_load_resp_rd_i;
+    float_rf_wdata[0]             = flw_recoded_data;
+    float_remote_load_resp_yumi_o = 1'b1;
 
-    float_sb_clear = 1'b0;
-    float_sb_clear_id = float_remote_load_resp_rd_i;
-
-    lane0_fp_sb_clear = 1'b0;
-    lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
-
-    fcsr_fflags_v_li[1] = 1'b0;
-    fcsr_fflags_li[1] = fpu_float_fflags_lo;
-    
-    //TODO (Logic Fix): In case of single issue, float_remote_load_resp_force_i should wb through 0, only in dual issue it should wb through 1? But current logic should work since 1 is empty during single issue too?
-    //TODO This logic breaks when run in single issue parameter mode, make it sound
-    if (float_remote_load_resp_force_i) begin
-      select_remote_flw = 1'b1;
-      float_rf_wen[1] = 1'b1;
-      float_rf_waddr[1] = float_remote_load_resp_rd_i;
-      float_rf_wdata[1] = flw_recoded_data;
-      float_remote_load_resp_yumi_o = 1'b1;
-      stall_remote_flw_wb = flw_wb_ctrl_r.valid | fpu_float_v_lo;
-
-      lane0_fp_sb_clear = 1'b1;
-      lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
-    end
-    //Removed else if since In dual issue, both cases can happen?
-    if (flw_wb_ctrl_r.valid) begin
-      select_remote_flw = 1'b0;
-      float_rf_wen[0] = 1'b1;
-      float_rf_waddr[0] = flw_wb_ctrl_r.rd_addr;
-      float_rf_wdata[0] = flw_recoded_data; 
-    end
-    else if (fpu_float_v_lo) begin
-      float_rf_wen[0] = 1'b1;
-      float_rf_waddr[0] = fpu_float_rd_lo;
-      float_rf_wdata[0] = fpu_float_result_lo;
-      fcsr_fflags_v_li[1] = 1'b1;
-      fcsr_fflags_li[1] = fpu_float_fflags_lo;
-    end
-    else begin
-      if (fdiv_fsqrt_v_lo) begin
-        fdiv_fsqrt_yumi_li = 1'b1;
-        float_rf_wen[0] = 1'b1;
-        float_rf_waddr[0] = fdiv_fsqrt_rd_lo;
-        float_rf_wdata[0] = fdiv_fsqrt_result_lo;
-
-        float_sb_clear = 1'b1;
-        float_sb_clear_id = fdiv_fsqrt_rd_lo;
-
-        fcsr_fflags_v_li[1] = 1'b1;
-        fcsr_fflags_li[1] = fdiv_fsqrt_fflags_lo;
-      end
-      //Removed else since both conditions can be true
-      if (float_remote_load_resp_v_i) begin
-        select_remote_flw = 1'b1;
-        float_rf_wen[1] = 1'b1;
-        float_rf_waddr[1] = float_remote_load_resp_rd_i;
-        float_rf_wdata[1] = flw_recoded_data;
-        float_remote_load_resp_yumi_o = 1'b1;
-
-        lane0_fp_sb_clear = 1'b1;
-        lane0_fp_sb_clear_id = float_remote_load_resp_rd_i;
-      end
-    end
+    lane0_fp_sb_wb_clear = 1'b1;
+    lane0_fp_wb_clear_id = float_remote_load_resp_rd_i;
   end
 
-  // fpu_float stall control
-  assign stall_fpu1_li = stall_all;
-  assign stall_fpu2_li = stall_remote_flw_wb;
+  // ---------------------------------------------------------------------------
+  // Port 1: FP compute results (fpu_float, fdiv/fsqrt)
+  // ---------------------------------------------------------------------------
+
+  // Decide which lane carries the FP compute result
+  // If you *never* place FP compute in lane 0 in dual-issue:
+  //   localparam fp_result_lane = 1;
+  // and replace wb_issue_size_r with fp_result_lane.
+  if (fpu_float_v_lo) begin
+    // fpu_float writeback
+    float_rf_wen[wb_issue_size_r]   = 1'b1;
+    float_rf_waddr[wb_issue_size_r] = fpu_float_rd_lo;
+    float_rf_wdata[wb_issue_size_r] = fpu_float_result_lo;
+
+    fcsr_fflags_v_li[1] = 1'b1;
+    fcsr_fflags_li[1]   = fpu_float_fflags_lo;
+  end
+
+  // fdiv/fsqrt completion: may happen same cycle as fpu_float
+  if (fdiv_fsqrt_v_lo) begin
+    fdiv_fsqrt_yumi_li = 1'b1;
+
+    // Use port 1 for fdiv/fsqrt result (compute lane)
+    float_rf_wen[1]   = 1'b1;
+    float_rf_waddr[1] = fdiv_fsqrt_rd_lo;
+    float_rf_wdata[1] = fdiv_fsqrt_result_lo;
+
+    float_sb_clear    = 1'b1;
+    float_sb_clear_id = fdiv_fsqrt_rd_lo;
+
+    // fdiv/fsqrt has higher priority on fflags port than fpu_float
+    fcsr_fflags_v_li[1] = 1'b1;
+    fcsr_fflags_li[1]   = fdiv_fsqrt_fflags_lo;
+  end
+end
+
+// FPU stall control (unchanged semantics)
+assign stall_fpu1_li = stall_all;
+assign stall_fpu2_li = stall_remote_flw_wb;
+
 
 
 
