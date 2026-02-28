@@ -412,8 +412,7 @@ endgenerate
   logic [reg_addr_width_lp-1:0] int_sb_score_id;
   logic int_sb_clear;
   logic [reg_addr_width_lp-1:0] int_sb_clear_id;
-  logic lane0_fp_sb_clear;
-  logic [reg_addr_width_lp-1:0] lane0_fp_sb_clear_id;
+
 
   scoreboard #(
     .els_p(RV32_reg_els_gp)
@@ -449,6 +448,7 @@ logic [1:0][fpu_recoded_data_width_gp-1:0] float_rf_wdata;  // MODIFIED: 2 write
 logic [2:0] float_rf_read;
 logic [2:0][fpu_recoded_data_width_gp-1:0] float_rf_rdata;
 
+
 regfile #(
   .width_p(fpu_recoded_data_width_gp)
   ,.els_p(RV32_reg_els_gp)
@@ -471,18 +471,24 @@ regfile #(
 );
 
 
-
   // FP scoreboard
   //
-  logic [icache_dual_issue_p:0] float_dependency;
+
+  logic float_dependency;
+  logic dual_issue_float_dependency;
+
   logic float_sb_score;
   logic [reg_addr_width_lp-1:0] float_sb_score_id;
+
+  logic dual_issue_float_sb_score;
+  logic [reg_addr_width_lp-1:0] dual_issue_float_sb_score_id;
+
   logic float_sb_clear;
   logic [reg_addr_width_lp-1:0] float_sb_clear_id;
-  logic lane0_fp_score;
-  logic [reg_addr_width_lp-1:0] lane0_fp_score_id;
-  logic lane0_fp_sb_wb_clear;
-  logic [reg_addr_width_lp-1:0] lane0_fp_wb_clear_id;
+
+  logic dual_issue_float_sb_clear;
+  logic [reg_addr_width_lp-1:0] dual_issue_float_sb_clear_id;
+
 
 
 scoreboard #(
@@ -499,11 +505,11 @@ scoreboard #(
   ,.dest_id_i(id_issue_size_r ? {id_r.instruction.rd , id_fp_r.instruction.rd}  : {id_fp_r.instruction.rd , id_r.instruction.rd} )
   ,.op_reads_rf_i(id_issue_size_r ? {id_fp_r.decode.read_frs3, id_fp_r.decode.read_frs2, id_fp_r.decode.read_frs1} : {id_r.decode.read_frs3, id_r.decode.read_frs2, id_r.decode.read_frs1})
   ,.op_writes_rf_i(id_issue_size_r ? {id_r.decode.write_frd, id_fp_r.decode.write_frd} : {'0, id_r.decode.write_frd})
-  ,.score_i({lane0_fp_score, float_sb_score})
-  ,.score_id_i({lane0_fp_score_id, float_sb_score_id})
-  ,.clear_i({lane0_fp_sb_wb_clear, float_sb_clear})
-  ,.clear_id_i({lane0_fp_wb_clear_id, float_sb_clear_id})
-  ,.dependency_o(float_dependency)
+  ,.score_i({dual_issue_float_sb_score, float_sb_score})
+  ,.score_id_i({dual_issue_float_sb_score_id, float_sb_score_id})
+  ,.clear_i({dual_issue_float_sb_clear, float_sb_clear})
+  ,.clear_id_i({dual_issue_float_sb_clear_id, float_sb_clear_id})
+  ,.dependency_o({dual_issue_float_dependency, float_dependency})
 );
 
   //TODO Understand FCSR
@@ -1690,10 +1696,10 @@ logic exe_lane0_is_older_r;
 
   // stall_depend_long_op (idiv, fdiv, remote_load, atomic)
   wire rs1_sb_clear_now = id_r.decode.read_rs1 & (id_rs1 == int_sb_clear_id) & int_sb_clear & id_rs1_non_zero; 
-  wire frs2_sb_clear_now = id_issue_size_r ? (id_fp_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == lane0_fp_sb_clear_id) & lane0_fp_sb_clear))) : (id_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == lane0_fp_sb_clear_id) & lane0_fp_sb_clear)));
+  wire frs2_sb_clear_now = id_issue_size_r ? (id_fp_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == dual_issue_float_sb_clear_id) & dual_issue_float_sb_clear))) : (id_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == dual_issue_float_sb_clear_id) & dual_issue_float_sb_clear)));
 
   //If Dual, stall on either dependence, if single issue original Logic
-  assign stall_depend_long_op = (int_dependency | float_dependency)
+  assign stall_depend_long_op = (int_dependency | float_dependency | dual_issue_float_dependency)
     |  (id_issue_size_r ? (rs1_sb_clear_now | frs2_sb_clear_now) :
                        (id_r.decode.is_fp_op ? rs1_sb_clear_now : frs2_sb_clear_now)
         );
@@ -1928,11 +1934,12 @@ logic exe_lane0_is_older_r;
 
 
   // FCSR control
-  assign fcsr_v_li = (id_issue_size_r ? id_fp_r.decode.is_csr_op : id_r.decode.is_csr_op) & id_issue;
-  assign fcsr_funct3_li = id_issue_size_r ? id_fp_r.instruction.funct3 : id_r.instruction.funct3;
-  assign fcsr_rs1_li = id_issue_size_r ? id_fp_r.instruction.rs1 : id_r.instruction.rs1;
-  assign fcsr_data_li = rs1_val_to_exe[7:0]; //TODO (Logic): Update 
-  assign fcsr_addr_li = id_issue_size_r ? id_fp_r.instruction[31:20] : id_r.instruction[31:20];
+   //TODO Logic: Any CSR update instruction will pass through Lane 0 ??
+  assign fcsr_v_li =  id_r.decode.is_csr_op & id_issue;
+  assign fcsr_funct3_li =  id_r.instruction.funct3;
+  assign fcsr_rs1_li =  id_r.instruction.rs1;
+  assign fcsr_data_li = rs1_val_to_exe[7:0]; 
+  assign fcsr_addr_li = id_r.instruction[31:20];
 
 
   // interrupt / CSR control
@@ -2150,10 +2157,25 @@ endgenerate
   assign fdiv_fsqrt_v_li = fdiv_fsqrt_in_fp_exe & ~stall_all;
 
   // FP scoreboard set logic
-  assign float_sb_score = ~stall_all & (fdiv_fsqrt_in_fp_exe );
-  assign lane0_fp_score = ~stall_all & (float_remote_load_in_exe);
-  assign float_sb_score_id = fp_exe_ctrl_r.rd;
-  assign lane0_fp_score_id = exe_r.instruction.rd;
+  always_comb begin
+     if (exe_issue_size_r) begin
+        //Lane 0 can cause score only due to remote load
+        float_sb_score    = ~stall_all & (float_remote_load_in_exe);
+        float_sb_score_id =  exe_r.instruction.rd;
+        //Lane 1 can cause score due to a long operation
+        dual_issue_float_sb_score    = ~stall_all & (fdiv_fsqrt_in_fp_exe);
+        dual_issue_float_sb_score_id = fp_exe_ctrl_r.rd;
+        end
+     else begin
+        dual_issue_float_sb_score = '0;
+        dual_issue_float_sb_score_id = '0;
+        float_sb_score =  ~stall_all & (float_remote_load_in_exe | exe_r.instruction.rd);
+        float_sb_score_id = fdiv_fsqrt_in_fp_exe 
+                            ? fp_exe_ctrl_r.rd
+                            : exe_r.instruction.rd;
+     end     
+  end
+
 
  //TODO : Update ALU Stage FP scoreboard logic
  //START HERE
@@ -2360,6 +2382,11 @@ endgenerate
 // FP_WB STAGE (2 write ports: port0 = loads, port1 = compute)
 // -----------------------------------------------------------------------------
 
+logic fp_exe_wb_port;
+// When dual issue, hardwire fp exe writebacks to use wb port 1
+assign fp_exe_wb_port = icache_dual_issue_p ? 1 : 0;
+
+
 always_comb begin
   // Default: no stalls, no writes, no scoreboard clears, no fflags
   stall_remote_flw_wb          = 1'b0;
@@ -2374,8 +2401,9 @@ always_comb begin
   select_remote_flw = 1'b0;
 
   // Scoreboard clear
-  lane0_fp_sb_wb_clear  = 1'b0;
-  lane0_fp_wb_clear_id  = '0;
+
+  dual_issue_float_sb_clear    = 1'b0;
+  dual_issue_float_sb_clear_id = '0;
 
   float_sb_clear    = 1'b0;
   float_sb_clear_id = '0;
@@ -2400,8 +2428,8 @@ always_comb begin
     stall_remote_flw_wb = flw_wb_ctrl_r.valid;
 
     // Clear lane0 scoreboard entry for this remote load
-    lane0_fp_sb_wb_clear = 1'b1;
-    lane0_fp_wb_clear_id = float_remote_load_resp_rd_i;
+    float_sb_clear = 1'b1;
+    float_sb_clear = float_remote_load_resp_rd_i;
   end
   // Next: local FP load from FLW_WB
   else if (flw_wb_ctrl_r.valid) begin
@@ -2419,23 +2447,23 @@ always_comb begin
     float_rf_wdata[0]             = flw_recoded_data;
     float_remote_load_resp_yumi_o = 1'b1;
 
-    lane0_fp_sb_wb_clear = 1'b1;
-    lane0_fp_wb_clear_id = float_remote_load_resp_rd_i;
+    float_sb_clear = 1'b1;
+    float_sb_clear = float_remote_load_resp_rd_i;
   end
 
   // ---------------------------------------------------------------------------
   // Port 1: FP compute results (fpu_float, fdiv/fsqrt)
   // ---------------------------------------------------------------------------
-
+  
   // Decide which lane carries the FP compute result
   // If you *never* place FP compute in lane 0 in dual-issue:
   //   localparam fp_result_lane = 1;
   // and replace wb_issue_size_r with fp_result_lane.
   if (fpu_float_v_lo) begin
     // fpu_float writeback
-    float_rf_wen[wb_issue_size_r]   = 1'b1;
-    float_rf_waddr[wb_issue_size_r] = fpu_float_rd_lo;
-    float_rf_wdata[wb_issue_size_r] = fpu_float_result_lo;
+    float_rf_wen[fp_exe_wb_port]   = 1'b1;
+    float_rf_waddr[fp_exe_wb_port] = fpu_float_rd_lo;
+    float_rf_wdata[fp_exe_wb_port] = fpu_float_result_lo;
 
     fcsr_fflags_v_li[1] = 1'b1;
     fcsr_fflags_li[1]   = fpu_float_fflags_lo;
@@ -2446,12 +2474,24 @@ always_comb begin
     fdiv_fsqrt_yumi_li = 1'b1;
 
     // Use port 1 for fdiv/fsqrt result (compute lane)
-    float_rf_wen[1]   = 1'b1;
-    float_rf_waddr[1] = fdiv_fsqrt_rd_lo;
-    float_rf_wdata[1] = fdiv_fsqrt_result_lo;
+    float_rf_wen[fp_exe_wb_port]   = 1'b1;
+    float_rf_waddr[fp_exe_wb_port] = fdiv_fsqrt_rd_lo;
+    float_rf_wdata[fp_exe_wb_port] = fdiv_fsqrt_result_lo;
+    
+    if (icache_dual_issue_p) begin
+    dual_issue_float_sb_clear    = 1'b1;
+    dual_issue_float_sb_clear_id = fdiv_fsqrt_rd_lo;
+    end
 
-    float_sb_clear    = 1'b1;
-    float_sb_clear_id = fdiv_fsqrt_rd_lo;
+    else begin
+    if ( ~flw_wb_ctrl_r.valid | ~float_remote_load_resp_v_i) begin  //Since we remove outer else-if and replace with else, to compensate we need to make sure either of first two conditions isnt met
+       float_sb_clear    = 1'b1;
+       float_sb_clear_id = fdiv_fsqrt_rd_lo;
+       dual_issue_float_sb_clear    = '0;
+       dual_issue_float_sb_clear_id = '0;
+      end
+    end
+
 
     // fdiv/fsqrt has higher priority on fflags port than fpu_float
     fcsr_fflags_v_li[1] = 1'b1;

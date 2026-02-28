@@ -156,15 +156,6 @@ logic du_is_eligible;
 generate
   if (icache_dual_issue_p) begin : gen_dual_issue_predecode
     
-    // Predecode output signals
-    logic predecode_lane_lo;
-    logic [RV32_reg_addr_width_gp-1:0] predecode_rd_lo;
-    logic                              predecode_rd_valid_lo;
-    logic [RV32_reg_addr_width_gp-1:0] predecode_rs1_lo;
-    logic                              predecode_rs1_valid_lo;
-    logic [RV32_reg_addr_width_gp-1:0] predecode_rs2_lo;
-    logic                              predecode_rs2_valid_lo;
-    
     // Predecode output signals for current instruction
     logic                              predecode_lane_lo;
     logic [RV32_reg_addr_width_gp-1:0] predecode_rd_lo;
@@ -293,7 +284,7 @@ generate
     
   end else begin : gen_no_dual_issue_predecode
     // When disabled, create dummy signals to avoid undefined references
-    localparam dual_issue_overhead_width_c = 0;
+    assign dual_issue_overhead = '0;
     
   end
 endgenerate
@@ -453,14 +444,13 @@ end
 
   assign icache_flush_r_o = icache_flush_r;
 
-  // TODO: Update the energy saving logic to account for dual-Issue
-  // Energy-saving logic
+  // TODO (optimize) : Add back the energy saving logic with the dual issue case
+  // Energy-saving logic disabled
   // - Don't read the icache if the current pc is not at the last word of the block, and 
   //   there is a hint from the next-pc logic that it is reading pc+4 next (no branch or jump).
   assign v_li = w_i
     ? write_en_icache
-    : (v_i & ((&pc_r[0+:icache_block_offset_width_lp]) | ~read_pc_plus4_i));
-
+    : v_i;
 
   // Merge the PC lower part and high part
   // BYTE operations

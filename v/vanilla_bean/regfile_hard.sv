@@ -194,48 +194,56 @@ module regfile_hard
   logic [num_rs_p-1:0][num_rd_p-1:0] rw_same_addr_r;
   logic [num_rs_p-1:0] r_v_r;
   logic [num_rs_p-1:0][width_p-1:0] r_safe_data;
+  logic [num_rs_p-1:0][width_p-1:0] r_safe_data_tmp;
   
   // ADDED: Declare bypass logic signals outside generate loop (FIXED)
   logic [num_rs_p-1:0] any_wr_match;
   logic [num_rs_p-1:0][width_p-1:0] matching_wr_data;
 
+
   // combinational logic
   //
   for (genvar i = 0; i < num_rs_p; i++) begin
-    // MODIFIED: Priority mux - check both write ports, port 1 has priority if both match
-    assign r_safe_data[i] = rw_same_addr_r[i][1] ? w_data_r[1]
-                          : rw_same_addr_r[i][0] ? w_data_r[0]
-                          : r_data_lo[i];
 
-    assign r_addr_n[i] = r_v_i[i]
+      always_comb begin
+         r_safe_data[i] = r_data_lo[i];  // default
+         for (int j = 0; j < num_rd_p; j++) begin
+              if (rw_same_addr_r[i][j])
+                  r_safe_data[i] = w_data_r[j];
+         end
+      end
+
+      assign r_addr_n[i] = r_v_i[i]
       ? r_addr_i[i]
       : r_addr_r[i];
 
-    // MODIFIED: Check if any write port matches current read address (FIXED)
-    assign any_wr_match[i] = w_v_i[1] & (r_addr_r[i] == w_addr_i[1])
-                           | w_v_i[0] & (r_addr_r[i] == w_addr_i[0]);
-    assign matching_wr_data[i] = (w_v_i[1] & (r_addr_r[i] == w_addr_i[1])) ? w_data_i[1]
-                                : (w_v_i[0] & (r_addr_r[i] == w_addr_i[0])) ? w_data_i[0]
-                                : '0;
-    
-    assign r_data_n[i] = any_wr_match[i]
-      ? matching_wr_data[i]
-      : (r_v_r[i] ? r_safe_data[i] : r_data_r[i]);
 
-    assign r_data_o[i] = ((r_addr_r[i] == '0) & (x0_tied_to_zero_p == 1))
-      ? '0
-      : (r_v_r[i] ? r_safe_data[i] : r_data_r[i]);
+      always_comb begin
+          r_data_n[i] = r_v_r[i] ? r_safe_data[i] : r_data_r[i];
+          for (int j = 0; j < num_rd_p; j++) begin
+               if (w_v_i[j] && (r_addr_r[i] == w_addr_i[j]))
+                   r_data_n[i] = w_data_i[j];
+          end
+      end
+
+
+      assign r_data_o[i] = ((r_addr_r[i] == '0) & (x0_tied_to_zero_p == 1))
+                           ? '0
+                           : (r_v_r[i] ? r_safe_data[i] : r_data_r[i]);
   end
 
-  // MODIFIED: Update w_data_n for each write port (FIXED)
-  for (genvar j = 0; j < num_rd_p; j++) begin
-    // FIXED: Create vector of all read ports that match this write port
-    logic [num_rs_p-1:0] rw_match_vec;
-    for (genvar k = 0; k < num_rs_p; k++) begin
-      assign rw_match_vec[k] = rw_same_addr[k][j];
-    end
-    assign w_data_n[j] = (|rw_match_vec) ? w_data_i[j] : w_data_r[j];
-  end
+  for (genvar j = 0; j < num_rd_p; j++) begin : gen_w_data
+
+       logic [num_rs_p-1:0] match_vec;
+       for (genvar i = 0; i < num_rs_p; i++) begin : gen_match
+            assign match_vec[i] = rw_same_addr[i][j];
+       end
+
+       assign w_data_n[j] = (|match_vec)
+                            ? w_data_i[j]
+                            : w_data_r[j];
+
+end
 
   // sequential logic
   //

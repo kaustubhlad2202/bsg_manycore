@@ -4,35 +4,35 @@
 
 `include "bsg_vanilla_defines.svh"
 
-//==============================================================================
-// Hybrid instruction detection macros
-//==============================================================================
+//====================================================================================
+// Hybrid instruction detection macros --> These instructions can never be dual issued
+//====================================================================================
 `define FCVT_W_FUNCT7    7'b1100000  // FCVT.W.S, FCVT.WU.S  (FP→INT)
 `define FCVT_S_FUNCT7    7'b1101000  // FCVT.S.W, FCVT.S.WU  (INT→FP)
 `define FMV_X_W_FUNCT7   7'b1110000  // FMV.X.W, FCLASS.S    (FP→INT)
 `define FMV_W_X_FUNCT7   7'b1111000  // FMV.W.X              (INT→FP)
 `define FCMP_FUNCT7      7'b1010000  // FEQ.S, FLT.S, FLE.S  (FP→INT)
 
-//==============================================================================
-// Instructions that never write to rd
-//==============================================================================
+//==========================================================================================================
+// Instructions that never write to rd --> These instructions should never cause dual issue RAW (same cycle)
+//==========================================================================================================
 `define NO_RD_WRITE_OPCODES \
   `RV32_STORE, \
   `RV32_STORE_FP, \
   `RV32_BRANCH, \
   `RV32_MISC_MEM
 
-//==============================================================================
-// Instructions that never read rs1
-//==============================================================================
+//===========================================================================================================
+// Instructions that never read rs1 --> These instructions should face  cause dual issue rs1 RAW (same cycle)
+//===========================================================================================================
 `define NO_RS1_READ_OPCODES \
   `RV32_LUI_OP, \
   `RV32_AUIPC_OP, \
   `RV32_JAL_OP
 
-//==============================================================================
-// Instructions that never read rs2
-//==============================================================================
+//===========================================================================================================
+// Instructions that never read rs2 --> These instructions should face  cause dual issue rs3 RAW (same cycle)
+//===========================================================================================================
 `define NO_RS2_READ_OPCODES \
   `RV32_LOAD, \
   `RV32_LOAD_FP, \
@@ -92,7 +92,7 @@ module icache_preDecode
                        (instr.op == `RV32_LOAD)     ||  // Integer loads
                        (instr.op == `RV32_STORE)    ||  // Integer stores
                        (instr.op == `RV32_LOAD_FP)  ||  // FLW (uses LSU)
-                       (instr.op == `RV32_STORE_FP) ||  // FSW (uses LSU)
+                       //(instr.op == `RV32_STORE_FP) ||  // FSW (uses LSU) TODO (Logic): FSW should be treated as pure Float, but can only be dual issued if no mem operation previously issued since it uses
                        (instr.op == `RV32_BRANCH)   ||  // Branches
                        (instr.op == `RV32_JAL_OP)   ||  // JAL
                        (instr.op == `RV32_JALR_OP)  ||  // JALR
@@ -136,7 +136,7 @@ module icache_preDecode
   logic is_fp_opcode;
   
   // FP opcodes: FMA (100??11) and OP_FP (1010011)
-  assign is_fp_opcode = (instr.op ==? 7'b100??11) || (instr.op == `RV32_OP_FP);
+  assign is_fp_opcode = (instr.op ==? 7'b100??11) || (instr.op == `RV32_OP_FP) || (instr.op == `RV32_STORE_FP); //TODO (Logic): Added FP store as pure FP
   
   // Pure FP = FP opcode but NOT hybrid
   assign is_pure_fp = is_fp_opcode && !is_hybrid;
@@ -146,9 +146,9 @@ module icache_preDecode
   //============================================================================
   always_comb begin
     if (is_pure_fp || is_hybrid) begin
-      inst_lane_o = 1'b1;  // FP_EXE lane
+      inst_lane_o = 1'b1;  // FP_EXE lane and FSW
     end else begin
-      inst_lane_o = 1'b0;  // EXE lane (INT + FLW/FSW)
+      inst_lane_o = 1'b0;  // EXE lane (INT + FLW)
     end
   end
 
