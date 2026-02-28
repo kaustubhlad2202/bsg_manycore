@@ -1699,7 +1699,7 @@ logic exe_lane0_is_older_r;
   wire frs2_sb_clear_now = id_issue_size_r ? (id_fp_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == dual_issue_float_sb_clear_id) & dual_issue_float_sb_clear))) : (id_r.decode.read_frs2 & (((id_fp_rs2 == float_sb_clear_id) & float_sb_clear) | ((id_fp_rs2 == dual_issue_float_sb_clear_id) & dual_issue_float_sb_clear)));
 
   //If Dual, stall on either dependence, if single issue original Logic
-  assign stall_depend_long_op = (int_dependency | float_dependency | dual_issue_float_dependency)
+  assign stall_depend_long_op = (int_dependency | float_dependency | (id_issue_size_r & dual_issue_float_dependency))
     |  (id_issue_size_r ? (rs1_sb_clear_now | frs2_sb_clear_now) :
                        (id_r.decode.is_fp_op ? rs1_sb_clear_now : frs2_sb_clear_now)
         );
@@ -2169,7 +2169,7 @@ endgenerate
      else begin
         dual_issue_float_sb_score = '0;
         dual_issue_float_sb_score_id = '0;
-        float_sb_score =  ~stall_all & (float_remote_load_in_exe | exe_r.instruction.rd);
+        float_sb_score =  ~stall_all & (float_remote_load_in_exe | fdiv_fsqrt_in_fp_exe);
         float_sb_score_id = fdiv_fsqrt_in_fp_exe 
                             ? fp_exe_ctrl_r.rd
                             : exe_r.instruction.rd;
