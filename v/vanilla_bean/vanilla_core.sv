@@ -1685,9 +1685,17 @@ logic exe_lane0_is_older_r;
   wire id_rs2_equal_mem_rd = (id_rs2 == mem_ctrl_r.rd_addr);
   wire id_rs3_equal_mem_rd = (id_rs3 == mem_ctrl_r.rd_addr);
 
+  //wire id_rs1_equal_mem_rd_dual_issue = (exe_issue_size_r & id_rs1 == mem_ctrl_r.frd_addr_dual_issue);
+  //wire id_rs2_equal_mem_rd_dual_issue = (exe_issue_size_r & id_rs2 == mem_ctrl_r.frd_addr_dual_issue);
+  //wire id_rs3_equal_mem_rd_dual_issue = (exe_issue_size_r & id_rs3 == mem_ctrl_r.frd_addr_dual_issue);
+
   wire id_frs1_equal_mem_rd = (id_fp_rs1 == mem_ctrl_r.rd_addr);
   wire id_frs2_equal_mem_rd = (id_fp_rs2 == mem_ctrl_r.rd_addr);
   wire id_frs3_equal_mem_rd = (id_fp_rs3 == mem_ctrl_r.rd_addr);
+
+  //wire id_frs1_equal_mem_rd_dual_issue = (exe_issue_size_r & id_fp_rs1 == mem_ctrl_r.frd_addr_dual_issue);
+  //wire id_frs2_equal_mem_rd_dual_issue = (exe_issue_size_r &id_fp_rs2 == mem_ctrl_r.frd_addr_dual_issue);
+  //wire id_frs3_equal_mem_rd_dual_issue = (exe_issue_size_r & id_fp_rs3 == mem_ctrl_r.frd_addr_dual_issue);
 
   //Signal is only for EXE stage and INT RF WB
   wire id_rs1_equal_wb_rd = (id_rs1 == wb_ctrl_r.rd_addr);
@@ -1724,7 +1732,9 @@ logic exe_lane0_is_older_r;
   // stall_bypass
   //Incase of dual issue, updated the appropriate decode registers in the decode stage
   wire stall_bypass_fp_frs = 
+
     id_issue_size_r ?
+
     ((id_fp_r.decode.read_frs1 & id_frs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_fp_r.decode.read_frs2 & id_frs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_fp_r.decode.read_frs3 & id_frs3_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
@@ -1734,6 +1744,9 @@ logic exe_lane0_is_older_r;
     |(id_fp_r.decode.read_frs1 & id_frs1_equal_mem_rd & mem_ctrl_r.write_frd)
     |(id_fp_r.decode.read_frs2 & id_frs2_equal_mem_rd & mem_ctrl_r.write_frd)
     |(id_fp_r.decode.read_frs3 & id_frs3_equal_mem_rd & mem_ctrl_r.write_frd))
+    //|(id_fp_r.decode.read_frs1 & id_frs1_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_issue)
+    //|(id_fp_r.decode.read_frs2 & id_frs2_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_issue)
+    //|(id_fp_r.decode.read_frs3 & id_frs3_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_isue))
 
   : ((id_r.decode.read_frs1 & id_rs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
     |(id_r.decode.read_frs2 & id_rs2_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_float_op)
@@ -1744,6 +1757,12 @@ logic exe_lane0_is_older_r;
     |(id_r.decode.read_frs1 & id_rs1_equal_mem_rd & mem_ctrl_r.write_frd)
     |(id_r.decode.read_frs2 & id_rs2_equal_mem_rd & mem_ctrl_r.write_frd)
     |(id_r.decode.read_frs3 & id_rs3_equal_mem_rd & mem_ctrl_r.write_frd));
+    //|(id_r.decode.read_frs1 & id_rs1_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_issue)
+    //|(id_r.decode.read_frs2 & id_rs2_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_issue)
+    //|(id_r.decode.read_frs3 & id_rs3_equal_mem_rd_dual_issue & mem_ctrl_r.write_frd_dual_issue));
+
+
+
 
   wire stall_bypass_fp_rs1 = (id_r.decode.read_rs1 & id_rs1_non_zero) &
     ((id_rs1_equal_fp_exe_rd & fp_exe_ctrl_r.fp_decode.is_fpu_int_op)
@@ -1835,29 +1854,12 @@ logic exe_lane0_is_older_r;
 
 
   // stall_idiv_busy
-  assign stall_idiv_busy = id_issue_size_r ?
-  ( id_fp_r.decode.is_idiv_op & (idiv_ready_and_lo
+  assign stall_idiv_busy =  id_r.decode.is_idiv_op & idiv_ready_and_lo
     ? (exe_issue_size_r ? exe_fp_r.decode.is_idiv_op :exe_r.decode.is_idiv_op)
-    : 1'b1)) :
-  ( id_r.decode.is_idiv_op & (idiv_ready_and_lo
-    ? (exe_issue_size_r ? exe_fp_r.decode.is_idiv_op :exe_r.decode.is_idiv_op)
-    : 1'b1));
+    : 1'b1;
 
   // stall_fcsr
-  assign stall_fcsr = id_issue_size_r ? 
-    ((id_fp_r.decode.is_csr_op)
-    & ((id_fp_r.instruction[31:20] == `RV32_CSR_FFLAGS_ADDR)
-      |(id_fp_r.instruction[31:20] == `RV32_CSR_FCSR_ADDR))
-    & (fp_exe_ctrl_r.fp_decode.is_fpu_float_op
-      |fp_exe_ctrl_r.fp_decode.is_fpu_int_op
-      |fp_exe_ctrl_r.fp_decode.is_fdiv_op
-      |fp_exe_ctrl_r.fp_decode.is_fsqrt_op
-      |(~fdiv_fsqrt_ready_and_lo)
-      |fdiv_fsqrt_v_lo
-      |fpu1_v_r
-      |fpu_float_v_lo))
-
-  : ((id_r.decode.is_csr_op)
+  assign stall_fcsr = (id_r.decode.is_csr_op)
     & ((id_r.instruction[31:20] == `RV32_CSR_FFLAGS_ADDR)
       |(id_r.instruction[31:20] == `RV32_CSR_FCSR_ADDR))
     & (fp_exe_ctrl_r.fp_decode.is_fpu_float_op
@@ -1867,7 +1869,7 @@ logic exe_lane0_is_older_r;
       |(~fdiv_fsqrt_ready_and_lo)
       |fdiv_fsqrt_v_lo
       |fpu1_v_r
-      |fpu_float_v_lo));
+      |fpu_float_v_lo);
 
 
   // FP_EXE forwarding mux control logic
@@ -1889,10 +1891,12 @@ logic exe_lane0_is_older_r;
     ((exe_r.decode.write_rd & id_rs1_equal_fp_exe_rd)
     |(fp_exe_ctrl_r.fp_decode.is_fpu_int_op & id_rs1_equal_fp_exe_rd))
     & id_rs1_non_zero;
+
   assign has_forward_data_rs1[1] =
     ((mem_ctrl_r.write_rd & id_rs1_equal_mem_rd)
     |(imul_v_lo & (imul_rd_lo == id_rs1)))
     & id_rs1_non_zero;
+
   assign has_forward_data_rs1[2] =
     wb_ctrl_r.write_rd & id_rs1_equal_wb_rd
     & id_rs1_non_zero;
@@ -1910,10 +1914,12 @@ logic exe_lane0_is_older_r;
     ((exe_r.decode.write_rd & id_rs2_equal_fp_exe_rd)
     |(fp_exe_ctrl_r.fp_decode.is_fpu_int_op & id_rs2_equal_fp_exe_rd))
     & id_rs2_non_zero;
+
   assign has_forward_data_rs2[1] =
     ((mem_ctrl_r.write_rd & id_rs2_equal_mem_rd)
     |(imul_v_lo & (imul_rd_lo == id_rs2)))
     & id_rs2_non_zero;
+
   assign has_forward_data_rs2[2] =
     wb_ctrl_r.write_rd & id_rs2_equal_wb_rd
     & id_rs2_non_zero;
@@ -2183,6 +2189,7 @@ endgenerate
   always_comb begin
     // common case
     mem_ctrl_n = '{
+      //Lane0 rd
       rd_addr: exe_r.instruction.rd,
       write_rd: exe_r.decode.write_rd,
       write_frd: exe_r.decode.write_frd,
@@ -2192,6 +2199,7 @@ endgenerate
       local_load: local_load_in_exe,
       byte_sel: lsu_byte_sel_lo,
       icache_miss: exe_r.icache_miss,
+      //Lane1 rd, only used when dual issuing
       write_frd_dual_issue: exe_issue_size_r ? exe_fp_r.decode.write_frd : '0,
       frd_addr_dual_issue: exe_issue_size_r ? exe_fp_r.instruction.rd : '0
     };
@@ -2292,10 +2300,11 @@ endgenerate
       ? local_load_packed_data
       : mem_data_r.exe_result);
 
-  wire mem_result_valid = imul_v_lo | mem_ctrl_r.write_rd | mem_ctrl_r.write_frd;
+  wire mem_result_valid = imul_v_lo | mem_ctrl_r.write_rd | mem_ctrl_r.write_frd | (mem_issue_size_r & mem_ctrl_r.write_frd_dual_issue)  ;
  
  
   // MEM -> WB
+
   always_comb begin
     wb_ctrl_n.write_rd = 1'b0;
     wb_ctrl_n.rd_addr = '0;
