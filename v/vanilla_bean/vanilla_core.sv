@@ -2300,7 +2300,7 @@ endgenerate
       ? local_load_packed_data
       : mem_data_r.exe_result);
 
-  wire mem_result_valid = imul_v_lo | mem_ctrl_r.write_rd | mem_ctrl_r.write_frd | (mem_issue_size_r & mem_ctrl_r.write_frd_dual_issue)  ;
+  wire mem_result_valid = imul_v_lo | mem_ctrl_r.write_rd | mem_ctrl_r.write_frd   ;
  
  
   // MEM -> WB
