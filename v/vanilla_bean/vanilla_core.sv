@@ -1854,9 +1854,9 @@ logic exe_lane0_is_older_r;
 
 
   // stall_idiv_busy
-  assign stall_idiv_busy =  id_r.decode.is_idiv_op & idiv_ready_and_lo
+  assign stall_idiv_busy = id_r.decode.is_idiv_op & (idiv_ready_and_lo
     ? (exe_issue_size_r ? exe_fp_r.decode.is_idiv_op :exe_r.decode.is_idiv_op)
-    : 1'b1;
+    : 1'b1);
 
   // stall_fcsr
   assign stall_fcsr = (id_r.decode.is_csr_op)
