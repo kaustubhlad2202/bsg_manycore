@@ -502,9 +502,9 @@ scoreboard #(
   .clk_i(clk_i)
   ,.reset_i(reset_i)
   ,.src_id_i(id_issue_size_r ? {id_fp_r.instruction[31:27], id_fp_r.instruction.rs2, id_fp_r.instruction.rs1} : {id_r.instruction[31:27], id_r.instruction.rs2, id_r.instruction.rs1})
-  ,.dest_id_i(id_issue_size_r ? {id_r.instruction.rd , id_fp_r.instruction.rd}  : {id_fp_r.instruction.rd , id_r.instruction.rd} )
+  ,.dest_id_i(id_issue_size_r ? {id_fp_r.instruction.rd , id_r.instruction.rd}  : {id_fp_r.instruction.rd , id_r.instruction.rd} )
   ,.op_reads_rf_i(id_issue_size_r ? {id_fp_r.decode.read_frs3, id_fp_r.decode.read_frs2, id_fp_r.decode.read_frs1} : {id_r.decode.read_frs3, id_r.decode.read_frs2, id_r.decode.read_frs1})
-  ,.op_writes_rf_i(id_issue_size_r ? {id_r.decode.write_frd, id_fp_r.decode.write_frd} : {'0, id_r.decode.write_frd})
+  ,.op_writes_rf_i(id_issue_size_r ? {id_fp_r.decode.write_frd, id_r.decode.write_frd} : {'0, id_r.decode.write_frd})
   ,.score_i({dual_issue_float_sb_score, float_sb_score})
   ,.score_id_i({dual_issue_float_sb_score_id, float_sb_score_id})
   ,.clear_i({dual_issue_float_sb_clear, float_sb_clear})
@@ -2438,7 +2438,7 @@ always_comb begin
 
     // Clear lane0 scoreboard entry for this remote load
     float_sb_clear = 1'b1;
-    float_sb_clear = float_remote_load_resp_rd_i;
+    float_sb_clear_id = float_remote_load_resp_rd_i;
   end
   // Next: local FP load from FLW_WB
   else if (flw_wb_ctrl_r.valid) begin
@@ -2457,7 +2457,7 @@ always_comb begin
     float_remote_load_resp_yumi_o = 1'b1;
 
     float_sb_clear = 1'b1;
-    float_sb_clear = float_remote_load_resp_rd_i;
+    float_sb_clear_id = float_remote_load_resp_rd_i;
   end
 
   // ---------------------------------------------------------------------------
