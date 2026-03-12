@@ -92,8 +92,7 @@ module icache_preDecode
                        (instr.op == `RV32_LOAD)     ||  // Integer loads
                        (instr.op == `RV32_STORE)    ||  // Integer stores
                        (instr.op == `RV32_LOAD_FP)  ||  // FLW (uses LSU)
-                       //(instr.op == `RV32_STORE_FP) ||  // FSW (uses LSU) TODO (Logic): FSW should be treated as pure Float, but can only be dual issued if no mem operation previously issued since it uses
-                       (instr.op == `RV32_BRANCH)   ||  // Branches
+                       //(instr.op == `RV32_STORE_FP) ||  // FSW (uses LSU) TODO (Logic): FSW should be treated as hybrid, only single issue
                        (instr.op == `RV32_JAL_OP)   ||  // JAL
                        (instr.op == `RV32_JALR_OP)  ||  // JALR
                        (instr.op == `RV32_LUI_OP)   ||  // LUI
@@ -107,10 +106,9 @@ module icache_preDecode
   logic is_hybrid;
   
   always_comb begin
-    is_hybrid = 1'b0;
+    is_hybrid = (instr.op == `RV32_STORE_FP);
     
     // Only check FP opcodes for hybrid operations
-    if (instr.op == `RV32_OP_FP) begin
       case (instr.funct7)
         `FCVT_W_FUNCT7:   is_hybrid = 1'b1;  // FCVT.W.S, FCVT.WU.S (FP→INT)
         `FCVT_S_FUNCT7:   is_hybrid = 1'b1;  // FCVT.S.W, FCVT.S.WU (INT→FP)
@@ -122,9 +120,7 @@ module icache_preDecode
             is_hybrid = 1'b1;
           end
         end
-        default: is_hybrid = 1'b0;
       endcase
-    end
   end
 
   assign inst_is_hybrid_o = is_hybrid;
@@ -136,7 +132,7 @@ module icache_preDecode
   logic is_fp_opcode;
   
   // FP opcodes: FMA (100??11) and OP_FP (1010011)
-  assign is_fp_opcode = (instr.op ==? 7'b100??11) || (instr.op == `RV32_OP_FP) || (instr.op == `RV32_STORE_FP); //TODO (Logic): Added FP store as pure FP
+  assign is_fp_opcode = (instr.op ==? 7'b100??11) | (instr.op == `RV32_OP_FP);
   
   // Pure FP = FP opcode but NOT hybrid
   assign is_pure_fp = is_fp_opcode && !is_hybrid;
@@ -145,7 +141,7 @@ module icache_preDecode
   // Lane Assignment
   //============================================================================
   always_comb begin
-    if (is_pure_fp || is_hybrid) begin
+    if (is_pure_fp) begin
       inst_lane_o = 1'b1;  // FP_EXE lane and FSW
     end else begin
       inst_lane_o = 1'b0;  // EXE lane (INT + FLW)
