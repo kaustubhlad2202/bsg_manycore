@@ -21,6 +21,8 @@ aggregated [CoreMark](https://www.eembc.org/coremark/) score, a world record. Ma
     * [HammerBlade Manycore Technical Reference Manual](https://docs.google.com/document/d/1b2g2nnMYidMkcn6iHJ9NGjpQYfZeWEmMdLeO_3nLtgo/edit?usp=sharing)
         * Version tag: **tile\_group\_org\_master**
         * A more comprehensive document including programming model, FPGA emulation and applications ([TVM](https://tvm.ai)) of manycore.
+3.  Dual issue Vanilla bean:
+    * [Dual_Issue_HB_Kaustubh_Lad]: (https://docs.google.com/document/d/1gcP4kKVl5Z1ggnYgweGHzoiDRACx1Q02gT4jMZpoIVg/edit?usp=sharing)
 
 # Getting started
 
