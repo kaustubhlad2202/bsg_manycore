@@ -128,7 +128,7 @@ module vanilla_core
   // pipeline signals
   // ctrl signals set to zero when reset_i is high.
   // data signals are not reset to zero.
-  logic id_en, exe_en;  //TODO (optimize): Current logic issues when no stalls, later implement lanewise stall issuing!
+  logic id_en, exe_en;
   logic mem_ctrl_en, mem_data_en,
         fp_exe_ctrl_en, fp_exe_data_en, flw_wb_ctrl_en, flw_wb_data_en;
   id_signals_s [1:0] id_n;
@@ -206,8 +206,7 @@ module vanilla_core
 
   logic [1:0][pc_width_lp-1:0] pc_plus4;
   assign pc_plus4[0] = pc_r[0] + 1'b1;
-  assign pc_plus4[1] = pc_r[dual_issue_eligible_lo] + 1'b1;  //We ensure pc and pc_plus4[1] are same for single issue, TODO (optimize): can we get rid of this signal?
-
+  assign pc_plus4[1] = pc_r[dual_issue_eligible_lo] + 1'b1;  //We ensure pc and pc_plus4[1] are same for single issue
   // ifetch counter
   logic [lg_icache_block_size_in_words_lp-1:0] ifetch_count_r;
   always_ff @ (posedge clk_i) begin
@@ -224,7 +223,6 @@ module vanilla_core
   logic id_issue_size_r, exe_issue_size_r;
   // debug pc
   // synopsys translate_off
-  //TODO (Logic): look at the usage of signals and update the logic, all pcs defaulted to 0 right now
   wire [data_width_p-1:0] if_pc = {{(data_width_p-pc_width_lp-2){1'b0}}, pc_r[dual_issue_eligible_lo], 2'b00};
   wire [data_width_p-1:0] id_pc =  id_issue_size_r ? (id_fp_r.pc_plus4 - 'd4) : (id_r.pc_plus4 - 'd4);
   wire [data_width_p-1:0] exe_pc = exe_issue_size_r ? (exe_fp_r.pc_plus4 - 'd4) : (exe_r.pc_plus4 - 'd4);
@@ -264,7 +262,7 @@ module vanilla_core
        aligned_pc_plus4[0] = pc_plus4[0];
        aligned_pc_plus4[1] = '0;
        lane_valid_lo = 2'b01;
-       lane0_is_older_lo = 1'b1; //TODO (Logic): This signal is used for FP scoreboard undo? Check arch and set the right value
+       lane0_is_older_lo = 1'b1;
       end
     end
        
@@ -510,7 +508,7 @@ scoreboard #(
   ,.dependency_o({dual_issue_float_dependency, float_dependency})
 );
 
-  //TODO Understand FCSR
+
   // FCSR
   //
   logic fcsr_v_li;
@@ -1133,7 +1131,6 @@ logic exe_lane0_is_older_r;
   );
 
 
-  //START RTL UPDATES FROM HERE
 
   //////////////////////////////
   //                          //
@@ -1406,7 +1403,6 @@ logic exe_lane0_is_older_r;
 
 
   // Next PC logic
-  //TODO (Logic): Currently by default it will assign PC_next based on PC_r[0], fix it to assign correctly
   always_comb begin
     icache_read_pc_plus4_li = 1'b0;
     if (reset_down) begin
@@ -1504,7 +1500,6 @@ logic exe_lane0_is_older_r;
 
 
   // IF -> ID
-  // TODO (Optimize): Current logic issues only if both lanes are free; incase we want dynamic issues have two id_en; one per lane!
   generate
   if (icache_dual_issue_p) begin: dual_issue_decode_packet
   always_comb begin
@@ -1657,7 +1652,6 @@ logic exe_lane0_is_older_r;
   wire [reg_addr_width_lp-1:0] id_fp_rs1 = id_issue_size_r ? id_fp_r.instruction.rs1 : id_r.instruction.rs1;
   wire [reg_addr_width_lp-1:0] id_fp_rs2 = id_issue_size_r ? id_fp_r.instruction.rs2 : id_r.instruction.rs2;
   wire [reg_addr_width_lp-1:0] id_fp_rs3 = id_issue_size_r ? id_fp_r.instruction[31:27] : id_r.instruction[31:27];
-  //START FROM HERE
   wire [reg_addr_width_lp-1:0] id_rd = id_r.instruction.rd;
   wire remote_req_in_exe = lsu_remote_req_v_lo;
   wire local_load_in_exe = lsu_dmem_v_lo & ~lsu_dmem_w_lo;
@@ -1872,7 +1866,6 @@ logic exe_lane0_is_older_r;
 
   // FP_EXE forwarding mux control logic
   //
-  //TODO (Logic): Update this logic to support multiple waddr ad wen wires
   assign select_rs1_to_fp_exe = id_r.decode.read_rs1 & ~id_issue_size_r;
   assign frs1_forward_sel = id_issue_size_r ? {id_fp_r.decode.read_frs1 & (id_fp_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_fp_r.decode.read_frs1 & (id_fp_rs1 == float_rf_waddr[0]) & float_rf_wen[0]} : {id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs1 & (id_rs1 == float_rf_waddr[0]) & float_rf_wen[0]};
   assign frs2_forward_sel = id_issue_size_r ? {id_fp_r.decode.read_frs2 & (id_fp_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_fp_r.decode.read_frs2 & (id_fp_rs2 == float_rf_waddr[0]) & float_rf_wen[0]} : {id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[1]) & float_rf_wen[1], id_r.decode.read_frs2 & (id_rs2 == float_rf_waddr[0]) & float_rf_wen[0]};
@@ -1938,7 +1931,6 @@ logic exe_lane0_is_older_r;
 
 
   // FCSR control
-   //TODO Logic: Any CSR update instruction will pass through Lane 0 ??
   assign fcsr_v_li =  id_r.decode.is_csr_op & id_issue;
   assign fcsr_funct3_li =  id_r.instruction.funct3;
   assign fcsr_rs1_li =  id_r.instruction.rs1;
@@ -1948,7 +1940,7 @@ logic exe_lane0_is_older_r;
 
   // interrupt / CSR control
   assign mcsr_we_li = (id_r.decode.is_csr_op) & id_issue;
-  assign mcsr_data_li = rs1_val_to_exe; //TODO (Logic): Update 
+  assign mcsr_data_li = rs1_val_to_exe;
   assign mcsr_instr_executed_li = id_r.valid & id_issue & mstatus_r.mie; // trace interrupt pending can be set outside interrupt.
   assign mcsr_interrupt_entered_li = interrupt_ready & ~stall_all;
   assign mcsr_mret_called_li = exe_r.decode.is_mret_op & ~stall_all;
@@ -2000,7 +1992,7 @@ generate
       npc_write_en = 1'b0;
     end
     else begin
-      npc_write_en = (exe_r.valid & mstatus_r.mie) | exe_r.decode.is_mret_op; //TODO (Logic): Does this need an update?
+      npc_write_en = (exe_r.valid & mstatus_r.mie) | exe_r.decode.is_mret_op;
       if (flush | stall_id) begin
         exe_en = 1'b1;
         exe_n = '0;
@@ -2181,8 +2173,7 @@ endgenerate
   end
 
 
- //TODO : Update ALU Stage FP scoreboard logic
- //START HERE
+
   // EXE,FP_EXE -> MEM
   always_comb begin
     // common case
@@ -2531,178 +2522,6 @@ assign stall_fpu2_li = stall_remote_flw_wb;
     end
   end
   // synopsys translate_on
-
-
-
-// ============================================================================
-// DEBUG SIGNALS - DUAL-ISSUE FRONT-END
-// ============================================================================
-
-// --------------------------------------------------------------------
-// Section 1: iCache Raw Outputs (before issue_lane alignment)
-// --------------------------------------------------------------------
-(* keep = "true" *) instruction_s          dbg_icache_inst0_raw;
-(* keep = "true" *) instruction_s          dbg_icache_inst1_raw;
-(* keep = "true" *) logic [pc_width_lp-1:0] dbg_icache_pc0_raw;
-(* keep = "true" *) logic [pc_width_lp-1:0] dbg_icache_pc1_raw;
-(* keep = "true" *) logic                  dbg_icache_dual_issue_eligible;
-(* keep = "true" *) logic                  dbg_icache_inst0_lane;  // 0=INT, 1=FP
-(* keep = "true" *) logic                  dbg_icache_inst1_lane;
-(* keep = "true" *) logic                  dbg_icache_v0;
-(* keep = "true" *) logic                  dbg_icache_v1;
-
-// Assign from icache outputs (pre-alignment)
-assign dbg_icache_inst0_raw            = instruction[0];
-assign dbg_icache_inst1_raw            = instruction[1];
-assign dbg_icache_pc0_raw              = pc_r[0];
-assign dbg_icache_pc1_raw              = pc_r[1];
-assign dbg_icache_dual_issue_eligible  = dual_issue_eligible_lo;
-assign dbg_icache_inst0_lane           = instr_lane_lo[0];
-assign dbg_icache_inst1_lane           = instr_lane_lo[1];
-assign dbg_icache_v0                   = icache_v_li;
-assign dbg_icache_v1                   = icache_v_li & dual_issue_eligible_lo;
-
-// --------------------------------------------------------------------
-// Section 2: Issue Lane Outputs (after alignment)
-// --------------------------------------------------------------------
-(* keep = "true" *) instruction_s          dbg_lane_inst0;
-(* keep = "true" *) instruction_s          dbg_lane_inst1;
-(* keep = "true" *) logic [pc_width_lp-1:0] dbg_lane_pc0;
-(* keep = "true" *) logic [pc_width_lp-1:0] dbg_lane_pc1;
-(* keep = "true" *) logic                  dbg_lane_v0;
-(* keep = "true" *) logic                  dbg_lane_v1;
-(* keep = "true" *) logic                  dbg_lane0_is_older;
-(* keep = "true" *) logic                  dbg_lane_dual_issue;
-
-assign dbg_lane_inst0      = aligned_instruction[0];
-assign dbg_lane_inst1      = aligned_instruction[1];
-assign dbg_lane_pc0        = aligned_pc_plus4[0];
-assign dbg_lane_pc1        = aligned_pc_plus4[1];
-assign dbg_lane_v0         = lane_valid_lo[0];
-assign dbg_lane_v1         = lane_valid_lo[1];
-assign dbg_lane0_is_older  = lane0_is_older_lo;
-assign dbg_lane_dual_issue = lane_valid_lo[0] & lane_valid_lo[1];
-
-// --------------------------------------------------------------------
-// Section 3: Decode Stage Outputs (per lane, combinational decode)
-// --------------------------------------------------------------------
-(* keep = "true" *) decode_s     dbg_decode_lane0;
-(* keep = "true" *) decode_s     dbg_decode_lane1;
-(* keep = "true" *) fp_decode_s  dbg_fp_decode_lane0;
-(* keep = "true" *) fp_decode_s  dbg_fp_decode_lane1;
-(* keep = "true" *) logic [4:0]  dbg_rs1_addr_lane0;
-(* keep = "true" *) logic [4:0]  dbg_rs1_addr_lane1;
-(* keep = "true" *) logic [4:0]  dbg_rs2_addr_lane0;
-(* keep = "true" *) logic [4:0]  dbg_rs2_addr_lane1;
-(* keep = "true" *) logic [4:0]  dbg_rd_addr_lane0;
-(* keep = "true" *) logic [4:0]  dbg_rd_addr_lane1;
-
-assign dbg_decode_lane0      = decode_lane0;
-assign dbg_decode_lane1      = decode_lane1;
-assign dbg_fp_decode_lane0   = fp_decode_lane0;
-assign dbg_fp_decode_lane1   = fp_decode_lane1;
-assign dbg_rs1_addr_lane0    = aligned_instruction[0].rs1;
-assign dbg_rs1_addr_lane1    = aligned_instruction[1].rs1;
-assign dbg_rs2_addr_lane0    = aligned_instruction[0].rs2;
-assign dbg_rs2_addr_lane1    = aligned_instruction[1].rs2;
-assign dbg_rd_addr_lane0     = aligned_instruction[0].rd;
-assign dbg_rd_addr_lane1     = aligned_instruction[1].rd;
-
-// --------------------------------------------------------------------
-// Section 4: ID pipeline debug (post-register decode view)
-// --------------------------------------------------------------------
-(* keep = "true" *) id_signals_s dbg_id_lane0;
-(* keep = "true" *) id_signals_s dbg_id_lane1;
-(* keep = "true" *) logic        dbg_id_lane0_valid;
-(* keep = "true" *) logic        dbg_id_lane1_valid;
-
-assign dbg_id_lane0       = id_r;
-assign dbg_id_lane1       = id_fp_r;
-assign dbg_id_lane0_valid = id_r.valid & ~id_r.icache_miss;
-assign dbg_id_lane1_valid = id_issue_size_r & id_fp_r.valid & ~id_fp_r.icache_miss;
-
-// --------------------------------------------------------------------
-// Section 5: High-level stall/flush
-// --------------------------------------------------------------------
-(* keep = "true" *) logic dbg_stall_all;
-(* keep = "true" *) logic dbg_stall_id;
-(* keep = "true" *) logic dbg_icache_miss;
-(* keep = "true" *) logic dbg_branch_mispredict;
-(* keep = "true" *) logic dbg_jalr_mispredict;
-(* keep = "true" *) logic dbg_icache_flush;
-
-assign dbg_stall_all         = stall_all;
-assign dbg_stall_id          = stall_id;
-assign dbg_icache_miss       = icache_miss_in_pipe;
-assign dbg_branch_mispredict = branch_mispredict;
-assign dbg_jalr_mispredict   = jalr_mispredict;
-assign dbg_icache_flush      = icache_flush;
-
-// --------------------------------------------------------------------
-// Section 6: Simple intra-bundle RAW hazard (lane0 -> lane1)
-// --------------------------------------------------------------------
-(* keep = "true" *) logic dbg_raw_hazard_lane0_to_lane1;
-
-assign dbg_raw_hazard_lane0_to_lane1 =
-  lane_valid_lo[0] & lane_valid_lo[1] &
-  (aligned_instruction[0].rd != 5'b0) &
-  ( (aligned_instruction[1].rs1 == aligned_instruction[0].rd & decode_lane1.read_rs1)
-   |(aligned_instruction[1].rs2 == aligned_instruction[0].rd & decode_lane1.read_rs2) );
-
-   // ============================================================================
-// DEBUG SIGNALS - FLOATING POINT REGISTER FILE (1-D ONLY)
-// ============================================================================
-
-// Write port 0
-(* keep = "true" *) logic                      dbg_fp_rf_wen0;
-(* keep = "true" *) logic [reg_addr_width_lp-1:0] dbg_fp_rf_waddr0;
-(* keep = "true" *) logic [fpu_recoded_data_width_gp-1:0] dbg_fp_rf_wdata0;
-
-// Write port 1
-(* keep = "true" *) logic                      dbg_fp_rf_wen1;
-(* keep = "true" *) logic [reg_addr_width_lp-1:0] dbg_fp_rf_waddr1;
-(* keep = "true" *) logic [fpu_recoded_data_width_gp-1:0] dbg_fp_rf_wdata1;
-
-// Read port enables
-(* keep = "true" *) logic dbg_fp_rf_ren0;
-(* keep = "true" *) logic dbg_fp_rf_ren1;
-(* keep = "true" *) logic dbg_fp_rf_ren2;
-
-// Read port addresses (decoded arch indices)
-(* keep = "true" *) logic [4:0] dbg_fp_rf_raddr0;
-(* keep = "true" *) logic [4:0] dbg_fp_rf_raddr1;
-(* keep = "true" *) logic [4:0] dbg_fp_rf_raddr2;
-
-// Read port data
-(* keep = "true" *) logic [fpu_recoded_data_width_gp-1:0] dbg_fp_rf_rdata0;
-(* keep = "true" *) logic [fpu_recoded_data_width_gp-1:0] dbg_fp_rf_rdata1;
-(* keep = "true" *) logic [fpu_recoded_data_width_gp-1:0] dbg_fp_rf_rdata2;
-
-// Aliases to internal FP RF interface
-assign dbg_fp_rf_wen0   = float_rf_wen[0];
-assign dbg_fp_rf_waddr0 = float_rf_waddr[0];
-assign dbg_fp_rf_wdata0 = float_rf_wdata[0];
-
-assign dbg_fp_rf_wen1   = float_rf_wen[1];
-assign dbg_fp_rf_waddr1 = float_rf_waddr[1];
-assign dbg_fp_rf_wdata1 = float_rf_wdata[1];
-
-assign dbg_fp_rf_ren0   = float_rf_read[0];
-assign dbg_fp_rf_ren1   = float_rf_read[1];
-assign dbg_fp_rf_ren2   = float_rf_read[2];
-
-assign dbg_fp_rf_raddr0 = aligned_instruction[icache_dual_issue_p].rs1;
-assign dbg_fp_rf_raddr1 = aligned_instruction[icache_dual_issue_p].rs2;
-assign dbg_fp_rf_raddr2 = aligned_instruction[icache_dual_issue_p][31:27];
-
-assign dbg_fp_rf_rdata0 = float_rf_rdata[0];
-assign dbg_fp_rf_rdata1 = float_rf_rdata[1];
-assign dbg_fp_rf_rdata2 = float_rf_rdata[2];
-
-
-// ============================================================================
-// END DEBUG SIGNALS
-// ============================================================================
 
 
 endmodule

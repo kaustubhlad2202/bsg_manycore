@@ -300,7 +300,7 @@ logic [icache_block_size_in_words_p-2:0][RV32_instr_width_gp-1:0] buffered_instr
 // DATA WRITE GROUP FORMATION
 //==============================================================================
 
-//Dual_Issue_Overhead //TODO: Optimize, only used in dual issue mode
+//Dual_Issue_Overhead 
 logic [icache_block_size_in_words_p-1:0] du_is_eligible_packed;
 logic [icache_block_size_in_words_p-1:0] dec_lane_packed;
 
@@ -310,14 +310,12 @@ generate
     assign du_is_eligible_packed = {
       1'b0,  // Entry 0 unused
       dual_issue_overhead.prev_inst_du_is_eligible,
-      //TODO: Parameterize below code
       dual_issue_overhead_r[2].prev_inst_du_is_eligible,
       dual_issue_overhead_r[1].prev_inst_du_is_eligible
     };
     
     assign dec_lane_packed = {
       dual_issue_overhead.curr_decode_lane,
-      //TODO: Parameterize below code
       dual_issue_overhead_r[2].curr_decode_lane,
       dual_issue_overhead_r[1].curr_decode_lane,
       dual_issue_overhead_r[0].curr_decode_lane
@@ -417,7 +415,7 @@ end
 
   // Program counter
   logic [pc_width_lp-1:0] pc_r; 
-  logic [pc_width_lp-1:0] pc_next_inst_r; //FIXME (Optimize): Used only for Dual Issue
+  logic [pc_width_lp-1:0] pc_next_inst_r;
 
   logic icache_flush_r;
   // Since imem has one cycle delay and we send next cycle's address, pc_n,
@@ -426,14 +424,14 @@ end
   always_ff @ (posedge clk_i) begin
     if (reset_i) begin
       pc_r <= '0;
-      pc_next_inst_r <= 'b1; //FIXME (Optimize): Used only for Dual Issue
+      pc_next_inst_r <= 'b1;
       icache_flush_r <= 1'b0;
     end
     else begin
 
       if (v_i & ~w_i) begin
         pc_r <= pc_i;
-        pc_next_inst_r <= pc_i + 'b1; //FIXME (Optimize): Used only for Dual Issue
+        pc_next_inst_r <= pc_i + 'b1;
         icache_flush_r <= 1'b0;
       end
       else begin
@@ -444,7 +442,6 @@ end
 
   assign icache_flush_r_o = icache_flush_r;
 
-  // TODO (optimize) : Add back the energy saving logic with the dual issue case
   // Energy-saving logic disabled
   // - Don't read the icache if the current pc is not at the last word of the block, and 
   //   there is a hint from the next-pc logic that it is reading pc+4 next (no branch or jump).
@@ -456,16 +453,16 @@ end
   // BYTE operations
 
   logic [icache_block_offset_width_lp-1:0] idx;
-  logic [icache_block_offset_width_lp-1:0] idx_next_inst; //FIXME (Optimize): Used only for Dual Issue
+  logic [icache_block_offset_width_lp-1:0] idx_next_inst;
 
   assign idx = pc_r[0+:icache_block_offset_width_lp];
-  assign idx_next_inst = pc_next_inst_r[0+:icache_block_offset_width_lp]; //FIXME (Optimize): Used only for Dual Issue
+  assign idx_next_inst = pc_next_inst_r[0+:icache_block_offset_width_lp];
 
   instruction_s [1:0] instr_out;
-  logic [1:0] lower_sign_out; //FIXME (Optimize): Use upper bit only for Dual Issue
-  logic [1:0] lower_cout_out; //FIXME (Optimize): Use upper bit only for Dual Issue
-  logic dual_issue; //FIXME (Optimize): Used only for Dual Issue
-  logic [1:0] decode_lane; //FIXME (Optimize): Used only for Dual Issue
+  logic [1:0] lower_sign_out;
+  logic [1:0] lower_cout_out;
+  logic dual_issue;
+  logic [1:0] decode_lane;
 
   assign instr_out[0] = icache_data_lo.instr[idx];
   assign lower_sign_out[0] = icache_data_lo.lower_sign[idx];
@@ -639,14 +636,14 @@ assign dual_issue_eligible_o = dual_issue;
 assign pred_or_jump_addr_o = is_jal_instr
   ? jal_pc[2+:pc_width_lp]
   : (is_jalr_instr
-    ? jalr_prediction_i  //FIXME: Check for uArch consistency of jalr_prediction_i when we dual issue
+    ? jalr_prediction_i 
     : branch_pc[2+:pc_width_lp]);
 
 // branch imm sign
 assign branch_predicted_taken_o = lower_sign_out_final;
 
 // the icache miss logic
-assign icache_miss_o = icache_data_lo.tag != pc_r[icache_block_offset_width_lp+icache_addr_width_lp+:icache_tag_width_p]; //FIXME: Check for uArch consistency of  when we dual issue
+assign icache_miss_o = icache_data_lo.tag != pc_r[icache_block_offset_width_lp+icache_addr_width_lp+:icache_tag_width_p];
 
 assign icache_flush_r_o = icache_flush_r;
 
